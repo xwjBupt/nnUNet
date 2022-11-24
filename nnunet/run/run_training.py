@@ -27,14 +27,25 @@ from nnunet.training.network_training.nnUNetTrainerV2_CascadeFullRes import (
     nnUNetTrainerV2CascadeFullRes,
 )
 from nnunet.utilities.task_name_id_conversion import convert_id_to_task_name
+import time
+from nnunet.utilities.lib import git_commit
+import os
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("network")
-    parser.add_argument("network_trainer")
-    parser.add_argument("task", help="can be task name or task id")
-    parser.add_argument("fold", help="0, 1, ..., 5 or 'all'")
+    parser.add_argument("--network", default="2d")
+    parser.add_argument("--network_trainer", default="nnUNetTrainerV2")
+    parser.add_argument(
+        "--task", default="513", type=str, help="can be task name or task id"
+    )
+    parser.add_argument("--fold", default="all", help="0, 1, ..., 5 or 'all'")
+    parser.add_argument("--desc", default="totest", help="the description of method")
+    parser.add_argument(
+        "--undebug",
+        action="store_true",
+        help="weather in debug mode, given = no debug, not given  = in debug",
+    )
     parser.add_argument(
         "-val",
         "--validation_only",
@@ -163,6 +174,21 @@ def main():
 
     args = parser.parse_args()
 
+    project_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    )
+    timestamp = time.strftime("%m_%d-%H_%M", time.localtime())
+    save_tag = timestamp + "/" + args.desc
+    wandb_tag = timestamp + "#" + args.desc
+    if args.undebug:
+        commit_info = (
+            "NOT IN DEBUG, Commit INFO >>> " + timestamp + "#" + args.desc + " <<<"
+        )
+        record_commit_info = (
+            git_commit(project_root, commit_info=commit_info) + "\n" * 3
+        )
+    else:
+        record_commit_info = "IN DEBUG >>> " + timestamp + "#" + args.desc + "<<<"
     task = args.task
     fold = args.fold
     network = args.network
@@ -211,7 +237,9 @@ def main():
         batch_dice,
         stage,
         trainer_class,
-    ) = get_default_configuration(network, task, network_trainer, plans_identifier)
+    ) = get_default_configuration(
+        network, task, network_trainer, plans_identifier, save_tag=save_tag
+    )
 
     if trainer_class is None:
         raise RuntimeError(
@@ -242,6 +270,7 @@ def main():
         deterministic=deterministic,
         fp16=run_mixed_precision,
     )
+    trainer.print_to_log_file(record_commit_info)
     if args.disable_saving:
         trainer.save_final_checkpoint = (
             False  # whether or not to save the final checkpoint

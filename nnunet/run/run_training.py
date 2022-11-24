@@ -34,13 +34,14 @@ import os
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--network", default="2d")
+    parser.add_argument("network", help="2d or 3d")
+    parser.add_argument("--desc", default="DEBUG", help="the description of method")
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")
+    parser.add_argument("--gpu_ids", default="0", type=str, help="use which gpu")
     parser.add_argument(
         "--task", default="513", type=str, help="can be task name or task id"
     )
     parser.add_argument("--fold", default="all", help="0, 1, ..., 5 or 'all'")
-    parser.add_argument("--desc", default="totest", help="the description of method")
     parser.add_argument(
         "--undebug",
         action="store_true",
@@ -173,13 +174,12 @@ def main():
     )
 
     args = parser.parse_args()
-
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_ids)
     project_root = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     )
     timestamp = time.strftime("%m_%d-%H_%M", time.localtime())
-    save_tag = timestamp + "/" + args.desc
-    wandb_tag = timestamp + "#" + args.desc
+
     if args.undebug:
         commit_info = (
             "NOT IN DEBUG, Commit INFO >>> " + timestamp + "#" + args.desc + " <<<"
@@ -189,6 +189,9 @@ def main():
         )
     else:
         record_commit_info = "IN DEBUG >>> " + timestamp + "#" + args.desc + "<<<"
+        args.desc = "DEBUG"
+    save_tag = timestamp + "/" + args.desc
+    wandb_tag = timestamp + "#" + args.desc
     task = args.task
     fold = args.fold
     network = args.network

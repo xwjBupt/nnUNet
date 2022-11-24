@@ -290,8 +290,8 @@ def main():
 
     trainer.initialize(
         not validation_only,
-        net_arc="DEEPLABV3_PLUS",
-        net_para=dict(init_ch=3),
+        net_arc="CSNET",
+        net_para=dict(init_ch=3, num_classes=2),
     )
 
     if find_lr:

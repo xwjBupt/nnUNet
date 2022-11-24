@@ -346,7 +346,8 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
         self.optimizer.zero_grad()
 
-        if self.fp16:
+        # if self.fp16:
+        if False:
             with autocast():
                 output = self.network(data)
                 del data

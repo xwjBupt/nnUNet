@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
 from nnunet.network_architecture.neural_network import SegmentationNetwork
-
+from nnunet.network_architecture.initialization import InitWeights_He
 
 model_urls = {
     "resnet18": "https://download.pytorch.org/models/resnet18-5c106cde.pth",
@@ -23,7 +23,8 @@ model_urls = {
     "resnet152": "https://download.pytorch.org/models/resnet152-b121ed2d.pth",
 }
 
-BatchNorm2d = torch.nn.BatchNorm2d
+BatchNorm2d = torch.nn.InstanceNorm2d
+InstanceNorm2d = torch.nn.InstanceNorm2d
 
 
 def conv3x3(in_planes, out_planes, stride=1):
@@ -39,10 +40,10 @@ class BasicBlock(nn.Module):
     def __init__(self, inplanes, planes, stride=1, downsample=None):
         super(BasicBlock, self).__init__()
         self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = BatchNorm2d(planes)
+        self.bn1 = InstanceNorm2d(planes)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(planes, planes)
-        self.bn2 = BatchNorm2d(planes)
+        self.bn2 = InstanceNorm2d(planes)
         self.downsample = downsample
         self.stride = stride
 
@@ -71,7 +72,7 @@ class Bottleneck(nn.Module):
     def __init__(self, inplanes, planes, stride=1, dilation=1, downsample=None):
         super(Bottleneck, self).__init__()
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
-        self.bn1 = BatchNorm2d(planes)
+        self.bn1 = InstanceNorm2d(planes)
         self.conv2 = nn.Conv2d(
             planes,
             planes,
@@ -81,9 +82,9 @@ class Bottleneck(nn.Module):
             padding=dilation,
             bias=False,
         )
-        self.bn2 = BatchNorm2d(planes)
+        self.bn2 = InstanceNorm2d(planes)
         self.conv3 = nn.Conv2d(planes, planes * 4, kernel_size=1, bias=False)
-        self.bn3 = BatchNorm2d(planes * 4)
+        self.bn3 = InstanceNorm2d(planes * 4)
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
@@ -129,7 +130,7 @@ class ResNet(nn.Module):
         self.conv1 = nn.Conv2d(
             init_ch, 64, kernel_size=7, stride=2, padding=3, bias=False
         )
-        self.bn1 = BatchNorm2d(64)
+        self.bn1 = InstanceNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
@@ -145,7 +146,7 @@ class ResNet(nn.Module):
         self.layer4 = self._make_MG_unit(
             block, 512, blocks=blocks, stride=strides[3], dilation=dilations[3]
         )
-        self._init_weight()
+        # self._init_weight()
 
     def _make_layer(self, block, planes, blocks, stride=1, dilation=1):
         downsample = None
@@ -158,7 +159,7 @@ class ResNet(nn.Module):
                     stride=stride,
                     bias=False,
                 ),
-                BatchNorm2d(planes * block.expansion),
+                InstanceNorm2d(planes * block.expansion),
             )
 
         layers = []
@@ -180,7 +181,7 @@ class ResNet(nn.Module):
                     stride=stride,
                     bias=False,
                 ),
-                BatchNorm2d(planes * block.expansion),
+                InstanceNorm2d(planes * block.expansion),
             )
 
         layers = []
@@ -213,14 +214,17 @@ class ResNet(nn.Module):
         x = self.layer4(x)
         return x, low_level_feat
 
-    def _init_weight(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2.0 / n))
-            elif isinstance(m, BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
+    # def _init_weight(self):
+    #     for m in self.modules():
+    #         if isinstance(m, nn.Conv2d):
+    #             n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+    #             m.weight.data.normal_(0, math.sqrt(2.0 / n))
+    #         elif isinstance(m, BatchNorm2d):
+    #             m.weight.data.fill_(1)
+    #             m.bias.data.zero_()
+    #         elif isinstance(m, InstanceNorm2d):
+    #             m.weight.data.fill_(1)
+    #             m.bias.data.zero_()
 
 
 class ASPP_module(nn.Module):
@@ -241,23 +245,23 @@ class ASPP_module(nn.Module):
             dilation=dilation,
             bias=False,
         )
-        self.bn = BatchNorm2d(planes)
+        self.bn = InstanceNorm2d(planes)
         self.relu = nn.ReLU()
-        self._init_weight()
+        # self._init_weight()
 
     def forward(self, x):
         x = self.atrous_convolution(x)
         x = self.bn(x)
         return self.relu(x)
 
-    def _init_weight(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2.0 / n))
-            elif isinstance(m, BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
+    # def _init_weight(self):
+    #     for m in self.modules():
+    #         if isinstance(m, nn.Conv2d):
+    #             n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+    #             m.weight.data.normal_(0, math.sqrt(2.0 / n))
+    #         elif isinstance(m, InstanceNorm2d):
+    #             m.weight.data.fill_(1)
+    #             m.bias.data.zero_()
 
 
 # def Deeplabv3plus_res101(input_channels, base_num_features, num_classes, num_pool, num_conv_per_stage=2,
@@ -271,7 +275,14 @@ class ASPP_module(nn.Module):
 #                  max_num_features=None, basic_block=ConvDropoutNormNonlin,
 #                  seg_output_use_bias=False):
 class Deeplabv3plus(nn.Module):
-    def __init__(self, backbone, num_classes=1, os=16, freeze_bn=False):
+    def __init__(
+        self,
+        backbone,
+        num_classes=1,
+        os=16,
+        freeze_bn=False,
+        weightInitializer=InitWeights_He(1e-2),
+    ):
         super(Deeplabv3plus, self).__init__()
 
         self.resnet_features = backbone
@@ -292,27 +303,28 @@ class Deeplabv3plus(nn.Module):
         self.global_avg_pool = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Conv2d(2048, 256, 1, stride=1, bias=False),
-            BatchNorm2d(256),
+            InstanceNorm2d(256),
             nn.ReLU(),
         )
 
         self.conv1 = nn.Conv2d(1280, 256, 1, bias=False)
-        self.bn1 = BatchNorm2d(256)
+        self.bn1 = InstanceNorm2d(256)
 
         self.conv2 = nn.Conv2d(256, 48, 1, bias=False)
-        self.bn2 = BatchNorm2d(48)
+        self.bn2 = InstanceNorm2d(48)
         self.last_conv = nn.Sequential(
             nn.Conv2d(304, 256, kernel_size=3, stride=1, padding=1, bias=False),
-            BatchNorm2d(256),
+            InstanceNorm2d(256),
             nn.ReLU(),
             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=False),
-            BatchNorm2d(256),
+            InstanceNorm2d(256),
             nn.ReLU(),
             nn.Conv2d(256, num_classes, kernel_size=1, stride=1),
         )
 
         if freeze_bn:
             self._freeze_bn()
+        self.apply(weightInitializer)
 
     def forward(self, input):
         x, low_level_features = self.resnet_features(input)
@@ -347,17 +359,17 @@ class Deeplabv3plus(nn.Module):
 
     def _freeze_bn(self):
         for m in self.modules():
-            if isinstance(m, BatchNorm2d):
+            if isinstance(m, InstanceNorm2d):
                 m.eval()
 
-    def _init_weight(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2.0 / n))
-            elif isinstance(m, BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
+    # def _init_weight(self):
+    #     for m in self.modules():
+    #         if isinstance(m, nn.Conv2d):
+    #             n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+    #             m.weight.data.normal_(0, math.sqrt(2.0 / n))
+    #         elif isinstance(m, InstanceNorm2d):
+    #             m.weight.data.fill_(1)
+    #             m.bias.data.zero_()
 
 
 # def Deeplabv3plus_res18(num_classes=3, os=16, pretrained=False):
@@ -462,7 +474,7 @@ class DEEPLABV3_PLUS(SegmentationNetwork):
 """print layers and params of network"""
 if __name__ == "__main__":
     model = DEEPLABV3_PLUS(num_classes=1, init_ch=3, os=16, pretrained=False)
-    dum = torch.rand([8, 3, 512, 512])
+    dum = torch.rand([8, 3, 640, 640])
     print(model)
     out = model(dum)
     print(out.shape)

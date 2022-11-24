@@ -35,9 +35,7 @@ import os
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("network", help="2d or 3d")
-    parser.add_argument(
-        "task", default="513", type=str, help="can be task name or task id"
-    )
+    parser.add_argument("task", type=str, help="can be task name or task id")
     parser.add_argument("--desc", default="DEBUG", help="the description of method")
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")
     parser.add_argument("--gpu_ids", default="0", type=str, help="use which gpu")
@@ -290,7 +288,11 @@ def main():
             True  # if false it will not store/overwrite _latest but separate files each
         )
 
-    trainer.initialize(not validation_only)
+    trainer.initialize(
+        not validation_only,
+        net_arc="DEEPLABV3_PLUS",
+        net_para=dict(init_ch=3),
+    )
 
     if find_lr:
         trainer.find_lr()

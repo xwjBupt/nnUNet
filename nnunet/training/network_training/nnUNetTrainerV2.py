@@ -15,12 +15,13 @@
 
 from collections import OrderedDict
 from typing import Tuple
-
+from importlib import import_module
 import numpy as np
 import torch
 from nnunet.training.data_augmentation.data_augmentation_moreDA import (
     get_moreDA_augmentation,
 )
+from typing import Callable, List, Optional, Tuple, Union
 from nnunet.training.loss_functions.deep_supervision import MultipleOutputLoss2
 from nnunet.utilities.to_torch import maybe_to_torch, to_cuda
 from nnunet.network_architecture.generic_UNet import Generic_UNet
@@ -75,7 +76,9 @@ class nnUNetTrainerV2(nnUNetTrainer):
         self.ds_loss_weights = None
         self.pin_memory = True
 
-    def initialize(self, training=True, force_load_plans=False):
+    def initialize(
+        self, training=True, force_load_plans=False, net_arc=None, net_para=dict()
+    ):
         """
         - replaced get_default_augmentation with get_moreDA_augmentation
         - enforce to only run this code once
@@ -154,7 +157,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
             else:
                 pass
 
-            self.initialize_network()
+            self.initialize_network(net_arc, net_para)
             self.initialize_optimizer_and_scheduler()
 
             assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
@@ -164,7 +167,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
             )
         self.was_initialized = True
 
-    def initialize_network(self):
+    def initialize_network(self, net_arc, net_para=dict()):
         """
         - momentum 0.99
         - SGD instead of Adam
@@ -175,44 +178,52 @@ class nnUNetTrainerV2(nnUNetTrainer):
         Known issue: forgot to set neg_slope=0 in InitWeights_He; should not make a difference though
         :return:
         """
-        if self.threeD:
-            conv_op = nn.Conv3d
-            dropout_op = nn.Dropout3d
-            norm_op = nn.InstanceNorm3d
+        if net_arc == None:
+            if self.threeD:
+                conv_op = nn.Conv3d
+                dropout_op = nn.Dropout3d
+                norm_op = nn.InstanceNorm3d
 
+            else:
+                conv_op = nn.Conv2d
+                dropout_op = nn.Dropout2d
+                norm_op = nn.InstanceNorm2d
+
+            norm_op_kwargs = {"eps": 1e-5, "affine": True}
+            dropout_op_kwargs = {"p": 0, "inplace": True}
+            net_nonlin = nn.LeakyReLU
+            net_nonlin_kwargs = {"negative_slope": 1e-2, "inplace": True}
+            self.network = Generic_UNet(
+                self.num_input_channels,
+                self.base_num_features,
+                self.num_classes,
+                len(self.net_num_pool_op_kernel_sizes),
+                self.conv_per_stage,
+                2,
+                conv_op,
+                norm_op,
+                norm_op_kwargs,
+                dropout_op,
+                dropout_op_kwargs,
+                net_nonlin,
+                net_nonlin_kwargs,
+                True,
+                False,
+                lambda x: x,
+                InitWeights_He(1e-2),
+                self.net_num_pool_op_kernel_sizes,
+                self.net_conv_kernel_sizes,
+                False,
+                True,
+                True,
+            )
         else:
-            conv_op = nn.Conv2d
-            dropout_op = nn.Dropout2d
-            norm_op = nn.InstanceNorm2d
-
-        norm_op_kwargs = {"eps": 1e-5, "affine": True}
-        dropout_op_kwargs = {"p": 0, "inplace": True}
-        net_nonlin = nn.LeakyReLU
-        net_nonlin_kwargs = {"negative_slope": 1e-2, "inplace": True}
-        self.network = Generic_UNet(
-            self.num_input_channels,
-            self.base_num_features,
-            self.num_classes,
-            len(self.net_num_pool_op_kernel_sizes),
-            self.conv_per_stage,
-            2,
-            conv_op,
-            norm_op,
-            norm_op_kwargs,
-            dropout_op,
-            dropout_op_kwargs,
-            net_nonlin,
-            net_nonlin_kwargs,
-            True,
-            False,
-            lambda x: x,
-            InitWeights_He(1e-2),
-            self.net_num_pool_op_kernel_sizes,
-            self.net_conv_kernel_sizes,
-            False,
-            True,
-            True,
-        )
+            # self.network = importlib.import_module(
+            #     "." + net_arc, package="nnunet.network_architecture"
+            # ).__init__(**net_para)
+            self.network = getattr(
+                import_module("nnunet.network_architecture." + net_arc), net_arc
+            )(**net_para)
         if torch.cuda.is_available():
             self.network.cuda()
         self.network.inference_apply_nonlin = softmax_helper

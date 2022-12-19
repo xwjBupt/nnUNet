@@ -1260,7 +1260,7 @@ class ERNET(SegmentationNetwork):
         self.num_classes = num_classes
 
         ######## self.model 设置自定义网络 by Sleeep ########
-        self.model = ERNet(in_ch_seg=init_ch, out_ch_seg=num_classes)
+        self.model = ERNet(in_ch_seg=init_ch, out_ch_seg=num_classes,deep_supervison = True)
         ######## self.model 设置自定义网络 by Sleeep ########
 
         self.name = "ERNET"

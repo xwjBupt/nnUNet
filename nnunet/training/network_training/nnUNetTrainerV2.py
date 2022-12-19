@@ -625,10 +625,12 @@ def get_FP_FN_label(
         seg = crop_t0[0].numpy().astype(np.uint8)
 
         kernel = np.ones((ero, ero), np.uint8)
-        erode = abs(cv2.erode(seg, kernel, iterations=1) - seg)
+        erode = abs(cv2.erode(seg, kernel, iterations=1).astype(np.int8) - seg)
+        erode = np.where(erode == 255, 1, erode)
 
         kernel = np.ones((dil, dil), np.uint8)
         dilate = abs(cv2.dilate(seg, kernel, iterations=1) - seg)
+        dilate = np.where(dilate == 255, 1, dilate)
 
         erode_seg.append(torch.tensor(erode[np.newaxis, np.newaxis, ...]).float())
         dilate_seg.append(torch.tensor(dilate[np.newaxis, np.newaxis, ...]).float())

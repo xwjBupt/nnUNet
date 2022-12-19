@@ -23,8 +23,15 @@ import numpy as np
 
 
 class GDL(nn.Module):
-    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.,
-                 square=False, square_volumes=False):
+    def __init__(
+        self,
+        apply_nonlin=None,
+        batch_dice=False,
+        do_bg=True,
+        smooth=1.0,
+        square=False,
+        square_volumes=False,
+    ):
         """
         square_volumes will square the weight term. The paper recommends square_volumes=True; I don't (just an intuition)
         """
@@ -69,10 +76,12 @@ class GDL(nn.Module):
         tp, fp, fn, _ = get_tp_fp_fn_tn(x, y_onehot, axes, loss_mask, self.square)
 
         # GDL weight computation, we use 1/V
-        volumes = sum_tensor(y_onehot, axes) + 1e-6 # add some eps to prevent div by zero
+        volumes = (
+            sum_tensor(y_onehot, axes) + 1e-6
+        )  # add some eps to prevent div by zero
 
         if self.square_volumes:
-            volumes = volumes ** 2
+            volumes = volumes**2
 
         # apply weights
         tp = tp / volumes
@@ -133,16 +142,24 @@ def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
     tn = (1 - net_output) * (1 - y_onehot)
 
     if mask is not None:
-        tp = torch.stack(tuple(x_i * mask[:, 0] for x_i in torch.unbind(tp, dim=1)), dim=1)
-        fp = torch.stack(tuple(x_i * mask[:, 0] for x_i in torch.unbind(fp, dim=1)), dim=1)
-        fn = torch.stack(tuple(x_i * mask[:, 0] for x_i in torch.unbind(fn, dim=1)), dim=1)
-        tn = torch.stack(tuple(x_i * mask[:, 0] for x_i in torch.unbind(tn, dim=1)), dim=1)
+        tp = torch.stack(
+            tuple(x_i * mask[:, 0] for x_i in torch.unbind(tp, dim=1)), dim=1
+        )
+        fp = torch.stack(
+            tuple(x_i * mask[:, 0] for x_i in torch.unbind(fp, dim=1)), dim=1
+        )
+        fn = torch.stack(
+            tuple(x_i * mask[:, 0] for x_i in torch.unbind(fn, dim=1)), dim=1
+        )
+        tn = torch.stack(
+            tuple(x_i * mask[:, 0] for x_i in torch.unbind(tn, dim=1)), dim=1
+        )
 
     if square:
-        tp = tp ** 2
-        fp = fp ** 2
-        fn = fn ** 2
-        tn = tn ** 2
+        tp = tp**2
+        fp = fp**2
+        fn = fn**2
+        tn = tn**2
 
     if len(axes) > 0:
         tp = sum_tensor(tp, axes, keepdim=False)
@@ -154,9 +171,8 @@ def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
 
 
 class SoftDiceLoss(nn.Module):
-    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.):
-        """
-        """
+    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.0):
+        """ """
         super(SoftDiceLoss, self).__init__()
 
         self.do_bg = do_bg
@@ -189,7 +205,7 @@ class SoftDiceLoss(nn.Module):
                 dc = dc[:, 1:]
         dc = dc.mean()
 
-        return -dc
+        return 1 - dc
 
 
 class MCCLoss(nn.Module):
@@ -226,7 +242,9 @@ class MCCLoss(nn.Module):
         tn /= voxels
 
         nominator = tp * tn - fp * fn + self.smooth
-        denominator = ((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)) ** 0.5 + self.smooth
+        denominator = (
+            (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
+        ) ** 0.5 + self.smooth
 
         mcc = nominator / denominator
 
@@ -241,7 +259,7 @@ class MCCLoss(nn.Module):
 
 
 class SoftDiceLossSquared(nn.Module):
-    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.):
+    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.0):
         """
         squares the terms in the denominator as proposed by Milletari et al.
         """
@@ -280,7 +298,7 @@ class SoftDiceLossSquared(nn.Module):
 
         intersect = x * y_onehot
         # values in the denominator get smoothed
-        denominator = x ** 2 + y_onehot ** 2
+        denominator = x**2 + y_onehot**2
 
         # aggregation was previously done in get_tp_fp_fn, but needs to be done here now (needs to be done after
         # squaring)
@@ -300,8 +318,17 @@ class SoftDiceLossSquared(nn.Module):
 
 
 class DC_and_CE_loss(nn.Module):
-    def __init__(self, soft_dice_kwargs, ce_kwargs, aggregate="sum", square_dice=False, weight_ce=1, weight_dice=1,
-                 log_dice=False, ignore_label=None):
+    def __init__(
+        self,
+        soft_dice_kwargs,
+        ce_kwargs,
+        aggregate="sum",
+        square_dice=False,
+        weight_ce=1,
+        weight_dice=1,
+        log_dice=False,
+        ignore_label=None,
+    ):
         """
         CAREFUL. Weights for CE and Dice do not need to sum to one. You can set whatever you want.
         :param soft_dice_kwargs:
@@ -313,8 +340,8 @@ class DC_and_CE_loss(nn.Module):
         """
         super(DC_and_CE_loss, self).__init__()
         if ignore_label is not None:
-            assert not square_dice, 'not implemented'
-            ce_kwargs['reduction'] = 'none'
+            assert not square_dice, "not implemented"
+            ce_kwargs["reduction"] = "none"
         self.log_dice = log_dice
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
@@ -326,7 +353,9 @@ class DC_and_CE_loss(nn.Module):
         if not square_dice:
             self.dc = SoftDiceLoss(apply_nonlin=softmax_helper, **soft_dice_kwargs)
         else:
-            self.dc = SoftDiceLossSquared(apply_nonlin=softmax_helper, **soft_dice_kwargs)
+            self.dc = SoftDiceLossSquared(
+                apply_nonlin=softmax_helper, **soft_dice_kwargs
+            )
 
     def forward(self, net_output, target):
         """
@@ -336,14 +365,16 @@ class DC_and_CE_loss(nn.Module):
         :return:
         """
         if self.ignore_label is not None:
-            assert target.shape[1] == 1, 'not implemented for one hot encoding'
+            assert target.shape[1] == 1, "not implemented for one hot encoding"
             mask = target != self.ignore_label
             target[~mask] = 0
             mask = mask.float()
         else:
             mask = None
 
-        dc_loss = self.dc(net_output, target, loss_mask=mask) if self.weight_dice != 0 else 0
+        dc_loss = (
+            self.dc(net_output, target, loss_mask=mask) if self.weight_dice != 0 else 0
+        )
         if self.log_dice:
             dc_loss = -torch.log(-dc_loss)
 
@@ -355,7 +386,7 @@ class DC_and_CE_loss(nn.Module):
         if self.aggregate == "sum":
             result = self.weight_ce * ce_loss + self.weight_dice * dc_loss
         else:
-            raise NotImplementedError("nah son") # reserved for other stuff (later)
+            raise NotImplementedError("nah son")  # reserved for other stuff (later)
         return result
 
 
@@ -382,7 +413,7 @@ class DC_and_BCE_loss(nn.Module):
         if self.aggregate == "sum":
             result = ce_loss + dc_loss
         else:
-            raise NotImplementedError("nah son") # reserved for other stuff (later)
+            raise NotImplementedError("nah son")  # reserved for other stuff (later)
 
         return result
 
@@ -400,7 +431,7 @@ class GDL_and_CE_loss(nn.Module):
         if self.aggregate == "sum":
             result = ce_loss + dc_loss
         else:
-            raise NotImplementedError("nah son") # reserved for other stuff (later)
+            raise NotImplementedError("nah son")  # reserved for other stuff (later)
         return result
 
 
@@ -412,7 +443,9 @@ class DC_and_topk_loss(nn.Module):
         if not square_dice:
             self.dc = SoftDiceLoss(apply_nonlin=softmax_helper, **soft_dice_kwargs)
         else:
-            self.dc = SoftDiceLossSquared(apply_nonlin=softmax_helper, **soft_dice_kwargs)
+            self.dc = SoftDiceLossSquared(
+                apply_nonlin=softmax_helper, **soft_dice_kwargs
+            )
 
     def forward(self, net_output, target):
         dc_loss = self.dc(net_output, target)
@@ -420,5 +453,5 @@ class DC_and_topk_loss(nn.Module):
         if self.aggregate == "sum":
             result = ce_loss + dc_loss
         else:
-            raise NotImplementedError("nah son") # reserved for other stuff (later?)
+            raise NotImplementedError("nah son")  # reserved for other stuff (later?)
         return result

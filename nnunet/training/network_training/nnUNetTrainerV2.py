@@ -18,6 +18,9 @@ from typing import Tuple
 from importlib import import_module
 import numpy as np
 import torch
+import cv2
+import random
+import torch.nn.functional as F
 from nnunet.training.data_augmentation.data_augmentation_moreDA import (
     get_moreDA_augmentation,
 )
@@ -336,6 +339,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         data_dict = next(data_generator)
         data = data_dict["data"]
         target = data_dict["target"]
+        data, target = get_FP_FN_label(data, target)
 
         data = maybe_to_torch(data)
         target = maybe_to_torch(target)
@@ -589,3 +593,65 @@ class nnUNetTrainerV2(nnUNetTrainer):
         ret = super().run_training()
         self.network.do_ds = ds
         return ret
+
+
+def get_FP_FN_label(
+    img, target, use_scales=[2], raw_target_size=(256, 256), ero=5, dil=5
+):
+
+    t0 = target[0]
+    erode_seg = []
+    dilate_seg = []
+    croped_seg = []
+    croped_img = []
+
+    for b in range(t0.shape[0]):
+
+        random_x_start = random.randint(0, t0.shape[-1] - raw_target_size[1] - 1)
+        random_y_start = random.randint(0, t0.shape[-2] - raw_target_size[0] - 1)
+
+        crop_t0 = t0[
+            b,
+            :,
+            random_y_start : random_y_start + raw_target_size[0],
+            random_x_start : random_x_start + raw_target_size[1],
+        ]
+        crop_img0 = img[
+            b,
+            :,
+            random_y_start : random_y_start + raw_target_size[0],
+            random_x_start : random_x_start + raw_target_size[1],
+        ]
+        seg = crop_t0[0].numpy().astype(np.uint8)
+
+        kernel = np.ones((ero, ero), np.uint8)
+        erode = abs(cv2.erode(seg, kernel, iterations=1) - seg)
+
+        kernel = np.ones((dil, dil), np.uint8)
+        dilate = abs(cv2.dilate(seg, kernel, iterations=1) - seg)
+
+        erode_seg.append(torch.tensor(erode[np.newaxis, np.newaxis, ...]).float())
+        dilate_seg.append(torch.tensor(dilate[np.newaxis, np.newaxis, ...]).float())
+        croped_img.append(crop_img0.unsqueeze(0))
+        croped_seg.append(crop_t0.unsqueeze(0))
+
+    erode_seg0 = torch.cat(erode_seg, dim=0)
+    dilate_seg0 = torch.cat(dilate_seg, dim=0)
+    croped_img0 = torch.cat(croped_img, dim=0)
+    croped_seg0 = torch.cat(croped_seg, dim=0)
+    todos = [croped_seg0, dilate_seg0, erode_seg0]
+
+    for use_scale in use_scales:
+
+        todos = todos + [
+            F.interpolate(
+                i,
+                size=(
+                    raw_target_size[0] // 2**use_scale,
+                    raw_target_size[1] // 2**use_scale,
+                ),
+                mode="nearest",
+            )
+            for i in todos
+        ]
+    return croped_img0, todos

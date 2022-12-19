@@ -34,11 +34,13 @@ import os
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("network", help="2d or 3d")
-    parser.add_argument("task", type=str, help="can be task name or task id")
+    parser.add_argument("--network", default="2d")
+    parser.add_argument(
+        "--task", default="512", type=str, help="can be task name or task id"
+    )
     parser.add_argument("--desc", default="DEBUG", help="the description of method")
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")
-    parser.add_argument("--gpu_ids", default="0", type=str, help="use which gpu")
+    parser.add_argument("--gpu_ids", default="4", type=str, help="use which gpu")
     parser.add_argument("--fold", default="all", help="0, 1, ..., 5 or 'all'")
     parser.add_argument(
         "--undebug",
@@ -290,7 +292,7 @@ def main():
 
     trainer.initialize(
         not validation_only,
-        net_arc="CSNET",
+        net_arc="ERNET",
         net_para=dict(init_ch=1, num_classes=2),
     )
 

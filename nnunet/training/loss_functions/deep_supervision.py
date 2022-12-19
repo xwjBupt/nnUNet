@@ -36,8 +36,15 @@ class MultipleOutputLoss2(nn.Module):
         else:
             weights = self.weight_factors
 
-        l = weights[0] * self.loss(x[0], y[0])
-        for i in range(1, len(x)):
-            if weights[i] != 0:
-                l += weights[i] * self.loss(x[i], y[i])
-        return l
+        l0_seg = weights[0] * self.loss(x[0], y[0])
+        l0_dilate = weights[0] * self.loss(x[1], y[1])
+        l0_erode = weights[0] * self.loss(x[2], y[2])
+
+        if len(x) > 3:
+            l2_seg = weights[2] * self.loss(x[3], y[3])
+            l2_dilate = weights[2] * self.loss(x[4], y[4])
+            l2_erode = weights[2] * self.loss(x[5], y[5])
+
+            return l0_seg + l0_dilate + l0_erode + l2_seg + l2_dilate + l2_erode
+        else:
+            return l0_seg + l0_dilate + l0_erode

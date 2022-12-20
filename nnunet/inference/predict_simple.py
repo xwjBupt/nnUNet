@@ -33,7 +33,7 @@ def main():
     parser.add_argument(
         "-i",
         "--input_folder",
-        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_20-17_46#DEBUG/all/validation_raw_postprocessed",
+        default="/home/user/skip/code/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task512_FPDSA/imagesTs/",
         help="Must contain all modalities for each patient in the correct"
         " order (same as training). Files must be named "
         "CASENAME_XXXX.nii.gz where XXXX is the modality "
@@ -42,7 +42,7 @@ def main():
     parser.add_argument(
         "-o",
         "--output_folder",
-        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_20-17_46#DEBUG/predictions",
+        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_20-10_53/ERNET-wDS-epoch500/predictions",
         help="folder for saving predictions",
     )
     parser.add_argument(
@@ -60,7 +60,7 @@ def main():
         "--cascade_trainer_class_name (this part can be ignored if defaults are used)."
         % default_trainer,
         required=False,
-        default=default_trainer,
+        default="nnUNetTrainerV2",
     )
     parser.add_argument(
         "-ctr",
@@ -206,7 +206,7 @@ def main():
         "-chk",
         help="checkpoint name, default: model_final_checkpoint",
         required=False,
-        default="model_final_checkpoint",
+        default="model_best",
     )
     parser.add_argument(
         "--disable_mixed_precision",

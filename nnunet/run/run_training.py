@@ -38,7 +38,9 @@ def main():
     parser.add_argument(
         "--task", default="512", type=str, help="can be task name or task id"
     )
-    parser.add_argument("--desc", default="ERNET-wDS", help="the description of method")
+    parser.add_argument(
+        "--desc", default="ERNET-wDS-epoch500", help="the description of method"
+    )
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")
     parser.add_argument("--gpu_ids", default="4", type=str, help="use which gpu")
     parser.add_argument("--fold", default="all", help="0, 1, ..., 5 or 'all'")

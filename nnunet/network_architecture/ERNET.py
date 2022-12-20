@@ -1260,13 +1260,19 @@ class ERNET(SegmentationNetwork):
         self.num_classes = num_classes
 
         ######## self.model 设置自定义网络 by Sleeep ########
-        self.model = ERNet(in_ch_seg=init_ch, out_ch_seg=num_classes,deep_supervison = True)
+        self.model = ERNet(
+            in_ch_seg=init_ch, out_ch_seg=num_classes, deep_supervison=True
+        )
         ######## self.model 设置自定义网络 by Sleeep ########
 
         self.name = "ERNET"
 
     def forward(self, x):
-        return self.model(x)
+        if self.training:
+            return self.model(x)
+        else:
+            return [self.model(x)[0]]
+        # return self.model(x)
         # if self.do_ds:
         #     return
         #         [self.model(x)]
@@ -1277,6 +1283,7 @@ class ERNET(SegmentationNetwork):
 """print layers and params of network"""
 if __name__ == "__main__":
     model = ERNET(num_classes=2, init_ch=3)
+    model.eval()
     dum = torch.rand([1, 3, 256, 256])
     print(model)
     out = model(dum)

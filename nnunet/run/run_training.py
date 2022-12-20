@@ -192,7 +192,7 @@ def main():
     else:
         record_commit_info = "IN DEBUG >>> " + timestamp + "#" + args.desc + "<<<"
         args.desc = "DEBUG"
-    save_tag = timestamp + "/" + args.desc
+    save_tag = timestamp + "#" + args.desc
     wandb_tag = timestamp + "#" + args.desc
     task = args.task
     fold = args.fold

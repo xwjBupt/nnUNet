@@ -14,6 +14,7 @@
 
 
 from torch import nn
+import torch
 
 
 class MultipleOutputLoss2(nn.Module):
@@ -29,22 +30,29 @@ class MultipleOutputLoss2(nn.Module):
         self.loss = loss
 
     def forward(self, x, y):
-        assert isinstance(x, (tuple, list)), "x must be either tuple or list"
-        assert isinstance(y, (tuple, list)), "y must be either tuple or list"
+        # assert isinstance(x, (tuple, list)), "x must be either tuple or list"
+        # assert isinstance(y, (tuple, list)), "y must be either tuple or list"
         if self.weight_factors is None:
             weights = [1] * len(x)
         else:
             weights = self.weight_factors
-
-        l0_seg = weights[0] * self.loss(x[0], y[0])
-        l0_dilate = weights[0] * self.loss(x[1], y[1])
-        l0_erode = weights[0] * self.loss(x[2], y[2])
+        if isinstance(x, list) and len(x) == 1:
+            l0_seg = weights[0] * self.loss(x[0], y[0])
+            return l0_seg
+        elif isinstance(x, torch.Tensor):
+            l0_seg = weights[0] * self.loss(x, y[0])
+            return l0_seg
+        elif len(x) == 3:
+            l0_seg = weights[0] * self.loss(x[0], y[0])
+            l0_dilate = weights[0] * self.loss(x[1], y[1])
+            l0_erode = weights[0] * self.loss(x[2], y[2])
+            return l0_seg + l0_dilate + l0_erode
 
         if len(x) > 3:
+            l0_seg = weights[0] * self.loss(x[0], y[0])
+            l0_dilate = weights[0] * self.loss(x[1], y[1])
+            l0_erode = weights[0] * self.loss(x[2], y[2])
             l2_seg = weights[2] * self.loss(x[3], y[3])
             l2_dilate = weights[2] * self.loss(x[4], y[4])
             l2_erode = weights[2] * self.loss(x[5], y[5])
-
             return l0_seg + l0_dilate + l0_erode + l2_seg + l2_dilate + l2_erode
-        else:
-            return l0_seg + l0_dilate + l0_erode

@@ -34,11 +34,13 @@ import os
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("network", help="2d or 3d")
-    parser.add_argument("task", type=str, help="can be task name or task id")
+    parser.add_argument("--network", default="2d", help="2d or 3d")
+    parser.add_argument(
+        "--task", default="512", type=str, help="can be task name or task id"
+    )
     parser.add_argument("--desc", default="DEBUG", help="the description of method")
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")
-    parser.add_argument("--gpu_ids", default="0", type=str, help="use which gpu")
+    parser.add_argument("--gpu_ids", default="4", type=str, help="use which gpu")
     parser.add_argument("--fold", default="all", help="0, 1, ..., 5 or 'all'")
     parser.add_argument(
         "--undebug",
@@ -188,7 +190,7 @@ def main():
     else:
         record_commit_info = "IN DEBUG >>> " + timestamp + "#" + args.desc + "<<<"
         args.desc = "DEBUG"
-    save_tag = timestamp + "/" + args.desc
+    save_tag = timestamp + "#" + args.desc
     wandb_tag = timestamp + "#" + args.desc
     task = args.task
     fold = args.fold
@@ -271,6 +273,8 @@ def main():
         deterministic=deterministic,
         fp16=run_mixed_precision,
     )
+    if not args.undebug:
+        trainer.max_num_epochs = 2
     trainer.print_to_log_file(record_commit_info)
     if args.disable_saving:
         trainer.save_final_checkpoint = (

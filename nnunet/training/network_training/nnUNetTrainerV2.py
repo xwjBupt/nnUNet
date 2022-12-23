@@ -73,7 +73,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
             deterministic,
             fp16,
         )
-        self.max_num_epochs = 2
+        self.max_num_epochs = 500
         self.initial_lr = 1e-2
         self.deep_supervision_scales = None
         self.ds_loss_weights = None

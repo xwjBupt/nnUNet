@@ -40,7 +40,7 @@ def main():
     )
     parser.add_argument(
         "--desc",
-        default="ERNET-wDS-epoch500-w_skip_decseg",
+        default="ERNET-wDS-epoch500-w_skip_decseg-E5_D5",
         help="the description of method",
     )
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")
@@ -186,7 +186,13 @@ def main():
 
     if args.undebug:
         commit_info = (
-            "NOT IN DEBUG, Commit INFO >>> " + timestamp + "#" + args.desc + " <<<"
+            "NOT IN DEBUG, Commit INFO >>> "
+            + timestamp
+            + "#"
+            + " TASKID-{} ".format(args.task)
+            + "#"
+            + args.desc
+            + " <<<"
         )
         record_commit_info = (
             git_commit(project_root, commit_info=commit_info) + "\n" * 3

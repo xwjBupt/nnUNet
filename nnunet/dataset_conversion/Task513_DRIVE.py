@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
     # download dataset from https://www.kaggle.com/insaff/massachusetts-roads-dataset
     # extract the zip file, then set the following path according to your system:
-    base = "/mnt/DRIVE"
+    base = "/home/user/skip/data/DRIVE/raw"
     # this folder should have the training and testing subfolders
 
     # now start the conversion to nnU-Net:
@@ -47,8 +47,8 @@ if __name__ == "__main__":
     # convert the training examples. Not all training images have labels, so we just take the cases for which there are
     # labels
     labels_dir_tr = join(base, "training", "gt")
-    images_dir_tr = join(base, "training", "image")
-    training_cases = subfiles(labels_dir_tr, suffix=".png", join=False)
+    images_dir_tr = join(base, "training", "images")
+    training_cases = subfiles(labels_dir_tr, suffix=".gif", join=False)
     for t in tqdm(training_cases):
         unique_name = t[
             :-4
@@ -56,7 +56,7 @@ if __name__ == "__main__":
         input_segmentation_file = join(labels_dir_tr, t)
         input_image_file = (
             join(images_dir_tr, t)
-            .replace(".png", ".jpg")
+            .replace(".gif", ".png")
             .replace("manual1", "training")
         )
 
@@ -85,13 +85,13 @@ if __name__ == "__main__":
 
     # now do the same for the test set
     labels_dir_ts = join(base, "test", "gt")
-    images_dir_ts = join(base, "test", "image")
-    testing_cases = subfiles(labels_dir_ts, suffix=".png", join=False)
+    images_dir_ts = join(base, "test", "images")
+    testing_cases = subfiles(labels_dir_ts, suffix=".gif", join=False)
     for ts in tqdm(testing_cases):
         unique_name = ts[:-4]
         input_segmentation_file = join(labels_dir_ts, ts)
         input_image_file = (
-            join(images_dir_ts, ts).replace(".png", ".jpg").replace("manual1", "test")
+            join(images_dir_ts, ts).replace(".gif", ".png").replace("manual1", "test")
         )
 
         output_image_file = join(target_imagesTs, unique_name)

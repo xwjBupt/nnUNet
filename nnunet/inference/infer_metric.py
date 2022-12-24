@@ -6,6 +6,18 @@ from loguru import logger
 import SimpleITK as sitk
 import argparse
 import torch
+import os
+import csv
+
+
+def write_to_csv(filename, content):
+    file_exist = os.path.exists(filename)
+    with open(filename, "a+", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=content.keys())
+        if not file_exist:
+            writer.writeheader()
+
+        writer.writerow(content)
 
 
 def sum_tensor(inp, axes, keepdim=False):
@@ -29,7 +41,7 @@ def infer_metric(pred_dir, gt_dir, mode="2d"):
     online_eval_fp = []
     online_eval_tn = []
     online_eval_fn = []
-    logger.add("LOG.log")
+    logger.add(pred_dir + "/LOG.log")
     preds = glob.glob(pred_dir + "/*.nii.gz")
     for pred in tqdm(preds):
         gt = gt_dir + pred.split("/")[-1]
@@ -194,7 +206,7 @@ def infer_metric(pred_dir, gt_dir, mode="2d"):
         )
     )
     logger.info(
-        "ACC: {} \n F1: {}\n JACCARD: {}\n PRECISION: {}\n SEN: {}\n SPE:{}\n FNR:{} \n FPR:{} \n ".format(
+        "\n ACC: {} \n F1: {}\n JACCARD: {}\n PRECISION: {}\n SEN: {}\n SPE:{}\n FNR:{} \n FPR:{} \n ".format(
             global_acc_per_class,
             global_dc_per_class,
             global_jaccard_per_class,
@@ -205,8 +217,24 @@ def infer_metric(pred_dir, gt_dir, mode="2d"):
             global_fpr_per_class,
         )
     )
-
+    content = dict(
+        METHOD=pred_dir.split("nnUNet_trained_models/nnUNet")[1],
+        ACC=global_acc_per_class,
+        F1=global_dc_per_class,
+        JACCARD=global_jaccard_per_class,
+        PRECISION=global_pre_per_class,
+        SEN=global_sen_per_class,
+        SPE=global_spe_per_class,
+        FNR=global_fnr_per_class,
+        FPR=global_acc_per_class,
+    )
     logger.info("<<<< ### Metric infer ### <<<<".format(pred_dir, gt_dir))
+    filename = (
+        pred_dir.split("nnUNetTrainer")[0] + pred_dir.split("/")[9] + "_results.csv"
+    )
+    logger.info(">>>> ### Write Metric To {} ### <<<<".format(filename))
+    write_to_csv(filename=filename, content=content)
+    return content
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@
 
 import argparse
 import torch
-
+import os
 from nnunet.inference.predict import predict_from_folder
 from nnunet.paths import (
     default_plans_identifier,
@@ -26,6 +26,7 @@ from nnunet.paths import (
 from batchgenerators.utilities.file_and_folder_operations import join, isdir, save_json
 from nnunet.utilities.task_name_id_conversion import convert_id_to_task_name
 from time import time
+from infer_metric import infer_metric
 
 
 def main():
@@ -42,7 +43,7 @@ def main():
     parser.add_argument(
         "-o",
         "--output_folder",
-        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_20-10_53/ERNET-wDS-epoch500/predictions",
+        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_20-10_53/ERNET-wDS-epoch500-E5_D5/",
         help="folder for saving predictions",
     )
     parser.add_argument(
@@ -220,7 +221,7 @@ def main():
 
     args = parser.parse_args()
     input_folder = args.input_folder
-    output_folder = args.output_folder
+    output_folder = os.path.join(args.output_folder, "predictions")
     part_id = args.part_id
     num_parts = args.num_parts
     folds = args.folds
@@ -361,6 +362,11 @@ def main():
     )
     end = time()
     save_json(end - st, join(output_folder, "prediction_time.txt"))
+    infer_metric(
+        pred_dir=output_folder,
+        gt_dir=input_folder.replace("imagesTs", "labelsTs"),
+        mode=model,
+    )
 
 
 if __name__ == "__main__":

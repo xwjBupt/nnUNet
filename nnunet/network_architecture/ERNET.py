@@ -524,30 +524,22 @@ class ERNet(nn.Module):
 
         x3_dilate = self.decode4_dilate(x4_dilate, x3_seg)
         x3_erode = self.decode4_erode(x4_erode, x3_seg)
-        x3_seg = self.trans4(
-            self.seg_up_4(self.upsample(x4_seg)) + x3_seg, x3_erode, x3_dilate
-        )
+        x3_seg = self.trans4(self.seg_up_4(self.upsample(x4_seg)), x3_erode, x3_dilate)
         x3_seg = self.decode4_seg(x3_seg)
 
         x2_dilate = self.decode3_dilate(x3_dilate, x2_seg)
         x2_erode = self.decode3_erode(x3_erode, x2_seg)
-        x2_seg = self.trans3(
-            self.seg_up_3(self.upsample(x3_seg)) + x2_seg, x2_erode, x2_dilate
-        )
+        x2_seg = self.trans3(self.seg_up_3(self.upsample(x3_seg)), x2_erode, x2_dilate)
         x2_seg = self.decode3_seg(x2_seg)
 
         x1_dilate = self.decode2_dilate(x2_dilate, x1_seg)
         x1_erode = self.decode2_erode(x2_erode, x1_seg)
-        x1_seg = self.trans2(
-            self.seg_up_2(self.upsample(x2_seg)) + x1_seg, x1_erode, x1_dilate
-        )
+        x1_seg = self.trans2(self.seg_up_2(self.upsample(x2_seg)), x1_erode, x1_dilate)
         x1_seg = self.decode2_seg(x1_seg)
 
         x0_dilate = self.decode1_dilate(x1_dilate, seg_init)
         x0_erode = self.decode1_erode(x1_erode, seg_init)
-        x0_seg = self.trans1(
-            self.seg_up_1(self.upsample(x1_seg)) + seg_init, x0_erode, x0_dilate
-        )
+        x0_seg = self.trans1(self.seg_up_1(self.upsample(x1_seg)), x0_erode, x0_dilate)
         x0_seg = self.decode1_seg(x0_seg)
 
         x0_dilate = self.final_conv_dilate(x0_dilate + seg_init)

@@ -209,12 +209,12 @@ class ERNet(nn.Module):
         out_ch_seg=1,
         in_ch_edge=1,
         out_ch_edge=1,
-        middle_out=[32, 64, 128, 256, 512],
+        middle_out=[24, 48, 96, 192, 384],
         deep_supervison=False,
         deconv=False,
         norm_layer=None,
         activation=None,
-        trans_mode="plus",
+        trans_mode="baseformerV2",
         loop=1,
         **kwargs
     ):
@@ -1148,10 +1148,10 @@ class Transfer(nn.Module):
                 ch=ch,
                 dim=in_dim,
                 patch_dim=patch_dim,
-                # depth=1,
-                # heads=16,
-                # mlp_dim=2048,
-                # dropout=0.1,
+                depth=1,
+                heads=16,
+                mlp_dim=2048,
+                dropout=0.1,
                 **kwargs
             )
             self.erode_trans = nn.Sequential(

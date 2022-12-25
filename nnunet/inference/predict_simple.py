@@ -43,7 +43,7 @@ def main():
     parser.add_argument(
         "-o",
         "--output_folder",
-        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_20-10_53/ERNET-wDS-epoch500-E5_D5/",
+        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_24-10_50#ERNET-wDS-epoch500-E3_D3/",
         help="folder for saving predictions",
     )
     parser.add_argument(

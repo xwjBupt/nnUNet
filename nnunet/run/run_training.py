@@ -40,7 +40,7 @@ def main():
     )
     parser.add_argument(
         "--desc",
-        default="ERNET-wDS-epoch300-E3_D7",
+        default="ERNET-wDS-epoch300-E5_D3",
         help="the description of method",
     )
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")

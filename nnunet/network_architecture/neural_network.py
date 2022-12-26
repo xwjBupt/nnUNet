@@ -430,7 +430,7 @@ class SegmentationNetwork(NeuralNetwork):
         )
         num_tiles = len(steps[0]) * len(steps[1]) * len(steps[2])
 
-        if verbose:
+        if True:
             print("data shape:", data_shape)
             print("patch size:", patch_size)
             print("steps (x, y, and z):", steps)
@@ -780,7 +780,7 @@ class SegmentationNetwork(NeuralNetwork):
 
         if mult is not None:
             result_torch[:, :] *= mult
-
+        print(result_torch.shape)
         return result_torch
 
     def _internal_maybe_mirror_and_pred_2D(
@@ -876,7 +876,7 @@ class SegmentationNetwork(NeuralNetwork):
         )
         num_tiles = len(steps[0]) * len(steps[1])
 
-        if verbose:
+        if True:
             print("data shape:", data_shape)
             print("patch size:", patch_size)
             print("steps (x, y, and z):", steps)

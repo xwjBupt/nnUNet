@@ -226,7 +226,7 @@ def infer_metric(pred_dir, gt_dir, mode="2d"):
         SEN=global_sen_per_class,
         SPE=global_spe_per_class,
         FNR=global_fnr_per_class,
-        FPR=global_acc_per_class,
+        FPR=global_fpr_per_class,
     )
     logger.info("<<<< ### Metric infer ### <<<<".format(pred_dir, gt_dir))
     filename = (

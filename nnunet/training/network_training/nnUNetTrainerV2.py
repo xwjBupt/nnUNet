@@ -598,7 +598,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
 
 def get_FP_FN_label(
-    img, target, use_scales=[2], raw_target_size=(256, 256), ero=3, dil=5
+    img, target, use_scales=[2], raw_target_size=(256, 256), ero=3, dil=3
 ):
 
     t0 = target[0]

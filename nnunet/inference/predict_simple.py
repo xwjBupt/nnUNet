@@ -178,7 +178,7 @@ def main():
     parser.add_argument(
         "--overwrite_existing",
         required=False,
-        default=False,
+        default=True,
         action="store_true",
         help="Set this flag if the target folder contains predictions that you would like to overwrite",
     )

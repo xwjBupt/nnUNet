@@ -73,7 +73,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
             deterministic,
             fp16,
         )
-        self.max_num_epochs = 300
+        self.max_num_epochs = 500
         self.initial_lr = 1e-2
         self.deep_supervision_scales = None
         self.ds_loss_weights = None
@@ -171,7 +171,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         self.was_initialized = True
 
     def initialize_network(
-        self, net_arc="ERNET", net_para=dict(init_ch=3, num_classes=2)
+        self, net_arc="ERNET", net_para=dict(init_ch=1, num_classes=2)
     ):
         """
         - momentum 0.99
@@ -228,7 +228,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
         # ).__init__(**net_para)
         self.network = getattr(
             import_module("nnunet.network_architecture." + "ERNET"), "ERNET"
-        )(**dict(init_ch=3, num_classes=2))
+        )(**dict(init_ch=1, num_classes=2))
         if torch.cuda.is_available():
             self.network.cuda()
         self.network.inference_apply_nonlin = softmax_helper

@@ -36,11 +36,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--network", default="2d")
     parser.add_argument(
-        "--task", default="513", type=str, help="can be task name or task id"
+        "--task", default="512", type=str, help="can be task name or task id"
     )
     parser.add_argument(
         "--desc",
-        default="ERNET-wDS-epoch300-baseformerV2-E3_D3",
+        default="ERNET-wDS-epoch500-baseformerV2-E3_D3",
         help="the description of method",
     )
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")

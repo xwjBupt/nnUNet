@@ -40,11 +40,11 @@ def main():
     )
     parser.add_argument(
         "--desc",
-        default="ERNET-wDS-epoch500-baseformerV2-E5_D5",
+        default="ERNET-wDS-epoch500-baseformerV2-E5_D7",
         help="the description of method",
     )
     parser.add_argument("--network_trainer", default="nnUNetTrainerV2")
-    parser.add_argument("--gpu_ids", default="6", type=str, help="use which gpu")
+    parser.add_argument("--gpu_ids", default="4", type=str, help="use which gpu")
     parser.add_argument("--fold", default="all", help="0, 1, ..., 5 or 'all'")
     parser.add_argument(
         "--undebug",

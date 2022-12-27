@@ -34,7 +34,7 @@ def main():
     parser.add_argument(
         "-i",
         "--input_folder",
-        default="/home/user/skip/code/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task513_DRIVE/imagesTs/",
+        default="/home/user/skip/code/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task512_FPDSA/imagesTs/",
         help="Must contain all modalities for each patient in the correct"
         " order (same as training). Files must be named "
         "CASENAME_XXXX.nii.gz where XXXX is the modality "
@@ -43,11 +43,11 @@ def main():
     parser.add_argument(
         "-o",
         "--output_folder",
-        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task513_DRIVE/nnUNetTrainerV2__nnUNetPlansv2.1/12_26-09_41#ERNET-wDS-epoch300-baseformerV2-E3_D3/",
+        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_26-13_50#ERNET-wDS-epoch500-baseformerV2-E5_D5/",
         help="folder for saving predictions",
     )
     parser.add_argument(
-        "-t", "--task_name", help="task name or task ID, required.", default="513"
+        "-t", "--task_name", help="task name or task ID, required.", default="512"
     )
 
     parser.add_argument(

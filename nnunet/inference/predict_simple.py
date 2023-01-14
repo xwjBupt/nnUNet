@@ -34,7 +34,7 @@ def main():
     parser.add_argument(
         "-i",
         "--input_folder",
-        default="/home/user/skip/code/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task512_FPDSA/imagesTs/",
+        default="/home/user/skip/code/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task514_FPDSA-SQ/imagesTs/",
         help="Must contain all modalities for each patient in the correct"
         " order (same as training). Files must be named "
         "CASENAME_XXXX.nii.gz where XXXX is the modality "
@@ -43,7 +43,7 @@ def main():
     parser.add_argument(
         "-o",
         "--output_folder",
-        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_27-10_35#ERNET-wDS-epoch500-baseformerV2-E7_D7/",
+        default="/home/user/skip/code/nnUNet/nnUNet_trained_models/nnUNet/2d/Task512_FPDSA/nnUNetTrainerV2__nnUNetPlansv2.1/12_27-10_34#ERNET-wDS-epoch500-baseformerV2-E5_D7/",
         help="folder for saving predictions",
     )
     parser.add_argument(
@@ -221,7 +221,7 @@ def main():
 
     args = parser.parse_args()
     input_folder = args.input_folder
-    output_folder = os.path.join(args.output_folder, "predictions")
+    output_folder = os.path.join(args.output_folder, "predictions1")
     part_id = args.part_id
     num_parts = args.num_parts
     folds = args.folds
@@ -362,11 +362,11 @@ def main():
     )
     end = time()
     save_json(end - st, join(output_folder, "prediction_time.txt"))
-    infer_metric(
-        pred_dir=output_folder,
-        gt_dir=input_folder.replace("imagesTs", "labelsTs"),
-        mode=model,
-    )
+    # infer_metric(
+    #     pred_dir=output_folder,
+    #     gt_dir=input_folder.replace("imagesTs", "labelsTs"),
+    #     mode=model,
+    # )
 
 
 if __name__ == "__main__":

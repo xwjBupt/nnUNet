@@ -37,7 +37,7 @@ def convert_2d_image_to_nifti(
     :return:
     """
     if gray_img:
-        img = img = io.imread(input_filename)
+        img = io.imread(input_filename)[..., 0]
         img = img[..., np.newaxis]
     else:
         img = cv2.cvtColor(cv2.imread(input_filename), cv2.COLOR_BGR2RGB)

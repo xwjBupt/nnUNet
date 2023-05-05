@@ -223,7 +223,7 @@ class nnUNetTrainer(object):
         self.oversample_foreground_percent = 0.33
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 1000
+        self.num_epochs = 500
         self.current_epoch = 0
 
         ### Dealing with labels/regions
@@ -288,8 +288,16 @@ class nnUNetTrainer(object):
         )
 
         self.print_to_log_file(
-            "######################\n{}\n######################\n".format(
-                record_commit_info
+            "####COMMIT TAG@{}_{}-{}_{}#############\n{}\n####COMMIT TAG@{}_{}-{}_{}#############\n".format(
+                timestamp.month,
+                timestamp.day,
+                timestamp.hour,
+                timestamp.minute,
+                record_commit_info,
+                timestamp.month,
+                timestamp.day,
+                timestamp.hour,
+                timestamp.minute,
             ),
             also_print_to_console=True,
             add_timestamp=False,

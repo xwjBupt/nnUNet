@@ -23,7 +23,6 @@ import os
 
 def git_commit(
     work_dir,
-    timestamp,
     levels=7,
     postfixs=[".py", ".sh"],
     commit_info="",
@@ -52,8 +51,9 @@ def git_commit(
         cid = repo.head.commit.hexsha
 
     commit_tag = (
-        commit_info
-        + "\n"
+        "COMMIT INFO >>> "
+        + commit_info
+        + " <<< \n"
         + "COMMIT BRANCH >>> "
         + branch
         + " <<< \n"
@@ -61,8 +61,7 @@ def git_commit(
         + cid
         + " <<<"
     )
-    record_commit_info = " COMMIT TAG [\n%s]\n" % commit_tag
-    return record_commit_info
+    return commit_tag
 
 
 def find_free_network_port() -> int:
@@ -445,14 +444,11 @@ def run_training_entry():
     else:
         device = torch.device("mps")
     if args.no_debug:
-        timestamp = time.strftime("%m_%d-%H_%M", time.localtime())
         commit_info = args.commit_info
         project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
         )
-        record_commit_info = git_commit(
-            project_root, timestamp, commit_info=commit_info
-        )
+        record_commit_info = git_commit(project_root, commit_info=commit_info)
     else:
         record_commit_info = "IN DEBUG DO NOT COMMIT"
 

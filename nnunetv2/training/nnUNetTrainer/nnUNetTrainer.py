@@ -288,7 +288,7 @@ class nnUNetTrainer(object):
         )
 
         self.print_to_log_file(
-            "######################\n{}######################\n".format(
+            "######################\n{}\n######################\n".format(
                 record_commit_info
             ),
             also_print_to_console=True,

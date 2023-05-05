@@ -447,7 +447,9 @@ def run_training_entry():
     if args.no_debug:
         timestamp = time.strftime("%m_%d-%H_%M", time.localtime())
         commit_info = args.commit_info
-        project_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        )
         record_commit_info = git_commit(
             project_root, timestamp, commit_info=commit_info
         )

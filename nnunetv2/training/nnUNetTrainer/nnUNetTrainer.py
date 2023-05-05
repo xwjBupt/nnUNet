@@ -7,7 +7,7 @@ from copy import deepcopy
 from datetime import datetime
 from time import time, sleep
 from typing import Union, Tuple, List
-
+from tqdm import tqdm, trange
 import numpy as np
 import torch
 from batchgenerators.dataloading.single_threaded_augmenter import (
@@ -288,7 +288,7 @@ class nnUNetTrainer(object):
         )
 
         self.print_to_log_file(
-            "####COMMIT TAG@{}_{}-{}_{}#############\n{}\n####COMMIT TAG@{}_{}-{}_{}#############\n".format(
+            "############# COMMIT TAG@{}_{}-{}_{} #############\n{}\n############# COMMIT TAG@{}_{}-{}_{} #############\n".format(
                 timestamp.month,
                 timestamp.day,
                 timestamp.hour,
@@ -1717,14 +1717,14 @@ class nnUNetTrainer(object):
 
             self.on_train_epoch_start()
             train_outputs = []
-            for batch_id in range(self.num_iterations_per_epoch):
+            for batch_id in trange(self.num_iterations_per_epoch):
                 train_outputs.append(self.train_step(next(self.dataloader_train)))
             self.on_train_epoch_end(train_outputs)
 
             with torch.no_grad():
                 self.on_validation_epoch_start()
                 val_outputs = []
-                for batch_id in range(self.num_val_iterations_per_epoch):
+                for batch_id in trange(self.num_val_iterations_per_epoch):
                     val_outputs.append(self.validation_step(next(self.dataloader_val)))
                 self.on_validation_epoch_end(val_outputs)
 

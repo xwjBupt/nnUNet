@@ -139,7 +139,7 @@ def compute_metrics(
         results["metrics"][r]["TN"] = tn
         results["metrics"][r]["Accuracy"] = (tp + tn) / (tp + tn + fp + fn)
         results["metrics"][r]["Precision"] = tp / (tp + fp)
-        results["metrics"][r]["Recall"] = tp / (tp + fp)
+        results["metrics"][r]["Recall"] = tp / (tp + fn)
         results["metrics"][r]["Specificity"] = tn / (tn + fp)
         results["metrics"][r]["n_pred"] = fp + tp
         results["metrics"][r]["n_ref"] = fn + tp

@@ -345,7 +345,7 @@ def run_training_entry():
         default="DEBUG",
         type=str,
         required=True,
-        help="description of this ex",
+        help="description of this experiment",
     )
     parser.add_argument(
         "-tr",

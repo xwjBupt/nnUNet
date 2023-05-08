@@ -190,9 +190,9 @@ class nnUNetTrainer(object):
             if nnUNet_results is not None
             else None
         )
-        if not record_commit_info[-1]:
+        if not record_commit_info[2]:
             self.output_folder = join(
-                self.output_folder_base, "DEBUG", record_commit_info[-2]
+                self.output_folder_base, "DEBUG", record_commit_info[1]
             )
         else:
             self.output_folder = join(
@@ -203,7 +203,7 @@ class nnUNetTrainer(object):
                     timestamp.hour,
                     timestamp.minute,
                 )
-                + record_commit_info[-2],
+                + record_commit_info[1],
             )
         self.output_folder = join(self.output_folder_base, f"fold_{fold}")
 

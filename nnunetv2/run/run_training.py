@@ -341,6 +341,13 @@ def run_training_entry():
         help="Fold of the 5-fold cross-validation. Should be an int between 0 and 4.",
     )
     parser.add_argument(
+        "commit_info",
+        default="DEBUG",
+        type=str,
+        required=True,
+        help="description of this ex",
+    )
+    parser.add_argument(
         "-tr",
         type=str,
         required=False,
@@ -358,11 +365,6 @@ def run_training_entry():
         "--no_debug",
         action="store_true",
         help="weather in debug mode, given = no debug, not given  = in debug",
-    )
-    parser.add_argument(
-        "--commit_info",
-        default="TEST",
-        help="git commit info",
     )
     parser.add_argument(
         "-pretrained_weights",
@@ -448,9 +450,13 @@ def run_training_entry():
         project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
         )
-        record_commit_info = git_commit(project_root, commit_info=commit_info)
+        record_commit_info = [
+            git_commit(project_root, commit_info=commit_info),
+            commit_info,
+            True,
+        ]
     else:
-        record_commit_info = "IN DEBUG DO NOT COMMIT"
+        record_commit_info = [commit_info, commit_info, False]
 
     run_training(
         args.dataset_name_or_id,

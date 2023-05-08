@@ -119,7 +119,7 @@ class nnUNetTrainer(object):
         dataset_json: dict,
         unpack_dataset: bool = True,
         device: torch.device = torch.device("cuda"),
-        record_commit_info="record_commit_info",
+        record_commit_info=["DEBUG", "DEBUG", False],
     ):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
 
@@ -140,7 +140,7 @@ class nnUNetTrainer(object):
         self.local_rank = 0 if not self.is_ddp else dist.get_rank()
 
         self.device = device
-
+        timestamp = datetime.now()
         # print what device we are using
         if self.is_ddp:  # implicitly it's clear that we use cuda in this case
             print(
@@ -190,6 +190,21 @@ class nnUNetTrainer(object):
             if nnUNet_results is not None
             else None
         )
+        if not record_commit_info[-1]:
+            self.output_folder = join(
+                self.output_folder_base, "DEBUG", record_commit_info[-2]
+            )
+        else:
+            self.output_folder = join(
+                self.output_folder_base,
+                "{}_{}#{}_{}".format(
+                    timestamp.month,
+                    timestamp.day,
+                    timestamp.hour,
+                    timestamp.minute,
+                )
+                + record_commit_info[-2],
+            )
         self.output_folder = join(self.output_folder_base, f"fold_{fold}")
 
         self.preprocessed_dataset_folder = join(
@@ -240,7 +255,7 @@ class nnUNetTrainer(object):
         ### Simple logging. Don't take that away from me!
         # initialize log file. This is just our log for the print statements etc. Not to be confused with lightning
         # logging
-        timestamp = datetime.now()
+
         maybe_mkdir_p(self.output_folder)
         self.log_file = join(
             self.output_folder,
@@ -293,7 +308,7 @@ class nnUNetTrainer(object):
                 timestamp.day,
                 timestamp.hour,
                 timestamp.minute,
-                record_commit_info,
+                record_commit_info[0],
                 timestamp.month,
                 timestamp.day,
                 timestamp.hour,

@@ -197,13 +197,13 @@ class nnUNetTrainer(object):
         else:
             self.output_folder = join(
                 self.output_folder_base,
-                "{}_{}#{}_{}".format(
+                "{}_{}#{}_{}@{}".format(
                     timestamp.month,
                     timestamp.day,
                     timestamp.hour,
                     timestamp.minute,
-                )
-                + record_commit_info[1],
+                    record_commit_info[1],
+                ),
             )
         self.output_folder = join(self.output_folder_base, f"fold_{fold}")
 
@@ -317,6 +317,7 @@ class nnUNetTrainer(object):
             also_print_to_console=True,
             add_timestamp=False,
         )
+        self.print_to_log_file("make output dir as {}".format(self.output_folder))
 
     def initialize(self):
         if not self.was_initialized:

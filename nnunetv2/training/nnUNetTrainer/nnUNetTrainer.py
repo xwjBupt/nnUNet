@@ -190,7 +190,6 @@ class nnUNetTrainer(object):
             if nnUNet_results is not None
             else None
         )
-        print(">>>>>>@@@@@{}".format(self.output_folder_base))
         if not record_commit_info[2]:
             self.output_folder = join(
                 self.output_folder_base, "DEBUG", record_commit_info[1]
@@ -207,9 +206,9 @@ class nnUNetTrainer(object):
                     record_commit_info[1],
                 ),
             )
-            print(">>>{}".format(self.output_folder))
-        self.output_folder = join(self.output_folder_base, f"fold_{fold}")
 
+        self.output_folder = join(self.output_folder_base, f"fold_{fold}")
+        print(">>>{}".format(self.output_folder))
         self.preprocessed_dataset_folder = join(
             self.preprocessed_dataset_folder_base,
             self.configuration_manager.data_identifier,
@@ -258,7 +257,7 @@ class nnUNetTrainer(object):
         ### Simple logging. Don't take that away from me!
         # initialize log file. This is just our log for the print statements etc. Not to be confused with lightning
         # logging
-
+        print(">>>####{}".format(self.output_folder))
         maybe_mkdir_p(self.output_folder)
         self.log_file = join(
             self.output_folder,

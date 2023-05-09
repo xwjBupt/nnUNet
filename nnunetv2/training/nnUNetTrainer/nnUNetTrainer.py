@@ -190,10 +190,12 @@ class nnUNetTrainer(object):
             if nnUNet_results is not None
             else None
         )
+        print(">>>>>>@@@@@{}".format(self.output_folder_base))
         if not record_commit_info[2]:
             self.output_folder = join(
                 self.output_folder_base, "DEBUG", record_commit_info[1]
             )
+            print(">>>>>>{}".format(self.output_folder))
         else:
             self.output_folder = join(
                 self.output_folder_base,
@@ -205,6 +207,7 @@ class nnUNetTrainer(object):
                     record_commit_info[1],
                 ),
             )
+            print(">>>{}".format(self.output_folder))
         self.output_folder = join(self.output_folder_base, f"fold_{fold}")
 
         self.preprocessed_dataset_folder = join(

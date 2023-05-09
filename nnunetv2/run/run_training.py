@@ -344,7 +344,6 @@ def run_training_entry():
         "commit_info",
         default="DEBUG",
         type=str,
-        required=True,
         help="description of this experiment",
     )
     parser.add_argument(

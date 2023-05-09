@@ -444,8 +444,8 @@ def run_training_entry():
         device = torch.device("cuda")
     else:
         device = torch.device("mps")
+    commit_info = args.commit_info
     if args.no_debug:
-        commit_info = args.commit_info
         project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
         )

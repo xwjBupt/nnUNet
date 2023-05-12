@@ -822,8 +822,8 @@ def predict_entry_point():
         "-chk",
         type=list,
         required=False,
-        default=["checkpoint_best.pth",'checkpoint_final.pth']
-        help="Name of the checkpoint you want to use. Default: checkpoint_final.pth",
+        default=["checkpoint_best.pth", "checkpoint_final.pth"],
+        help="Name of the checkpoint you want to use. Default: [checkpoint_best.pth, checkpoint_final.pth]",
     )
     parser.add_argument(
         "-npp",

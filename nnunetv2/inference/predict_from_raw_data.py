@@ -49,6 +49,9 @@ from nnunetv2.utilities.plans_handling.plans_handler import (
 )
 from nnunetv2.utilities.utils import create_lists_from_splitted_dataset_folder
 
+# os.environ["OMP_NUM_THREADS"] = "1"
+# torch.set_num_interop_threads(1)
+
 
 class PreprocessAdapter(DataLoader):
     def __init__(
@@ -829,7 +832,7 @@ def predict_entry_point():
         "-npp",
         type=int,
         required=False,
-        default=3,
+        default=2,
         help="Number of processes used for preprocessing. More is not always better. Beware of "
         "out-of-RAM issues. Default: 3",
     )
@@ -837,7 +840,7 @@ def predict_entry_point():
         "-nps",
         type=int,
         required=False,
-        default=3,
+        default=2,
         help="Number of processes used for segmentation export. More is not always better. Beware of "
         "out-of-RAM issues. Default: 3",
     )

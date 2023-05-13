@@ -86,6 +86,7 @@ def get_trainer_from_args(
     use_compressed: bool = False,
     device: torch.device = torch.device("cuda"),
     record_commit_info: str = "record_commit_info",
+    previous_stage: str = "previous_stage",
 ):
     # load nnunet class and do sanity checks
     nnunet_trainer = recursive_find_python_class(
@@ -132,6 +133,7 @@ def get_trainer_from_args(
         unpack_dataset=not use_compressed,
         device=device,
         record_commit_info=record_commit_info,
+        previous_stage=previous_stage,
     )
     return nnunet_trainer
 
@@ -251,6 +253,7 @@ def run_training(
     disable_checkpointing: bool = False,
     device: torch.device = torch.device("cuda"),
     record_commit_info: str = "IN DEBUG DO NOT COMMIT",
+    previous_stage: str = "previous_stage",
 ):
     if isinstance(fold, str):
         if fold != "all":
@@ -302,6 +305,7 @@ def run_training(
             use_compressed_data,
             device=device,
             record_commit_info=record_commit_info,
+            previous_stage=previous_stage,
         )
 
         if disable_checkpointing:
@@ -345,6 +349,12 @@ def run_training_entry():
         default="DEBUG",
         type=str,
         help="description of this experiment",
+    )
+    parser.add_argument(
+        "--previous_stage",
+        default="###NOT IMPLEMENTED###",
+        type=str,
+        help="need to be specified if training in cascade model,the first stage output",
     )
     parser.add_argument(
         "-tr",
@@ -444,6 +454,10 @@ def run_training_entry():
         device = torch.device("cuda")
     else:
         device = torch.device("mps")
+    if args.configuration == "3d_cascade_fullres":
+        assert (
+            args.previous_stage != "###NOT IMPLEMENTED###"
+        ), "previous_stage output need to be specified in cacade mode"
     commit_info = args.commit_info
     if args.no_debug:
         project_root = os.path.dirname(
@@ -472,6 +486,7 @@ def run_training_entry():
         args.disable_checkpointing,
         device=device,
         record_commit_info=record_commit_info,
+        previous_stage=args.previous_stage,
     )
 
 

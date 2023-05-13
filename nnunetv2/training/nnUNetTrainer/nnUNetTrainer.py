@@ -120,6 +120,7 @@ class nnUNetTrainer(object):
         unpack_dataset: bool = True,
         device: torch.device = torch.device("cuda"),
         record_commit_info=["DEBUG", "DEBUG", False],
+        previous_stage="previous_stage",
     ):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
 
@@ -169,6 +170,7 @@ class nnUNetTrainer(object):
         self.dataset_json = dataset_json
         self.fold = fold
         self.unpack_dataset = unpack_dataset
+        self.previous_stage = previous_stage
 
         ### Setting all the folder names. We need to make sure things don't crash in case we are just running
         # inference and some of the folders may not be defined!
@@ -217,20 +219,24 @@ class nnUNetTrainer(object):
         # IMPORTANT! the mapping must be bijective, so lowres must point to fullres and vice versa (using
         # "previous_stage" and "next_stage"). Otherwise it won't work!
         self.is_cascaded = self.configuration_manager.previous_stage_name is not None
+        # self.folder_with_segs_from_previous_stage = (
+        #     join(
+        #         nnUNet_results,
+        #         self.plans_manager.dataset_name,
+        #         self.__class__.__name__
+        #         + "__"
+        #         + self.plans_manager.plans_name
+        #         + "__"
+        #         + self.configuration_manager.previous_stage_name,
+        #         "predicted_next_stage",
+        #         self.configuration_name,
+        #     )
+        #     if self.is_cascaded
+        #     else None
+        # )
+
         self.folder_with_segs_from_previous_stage = (
-            join(
-                nnUNet_results,
-                self.plans_manager.dataset_name,
-                self.__class__.__name__
-                + "__"
-                + self.plans_manager.plans_name
-                + "__"
-                + self.configuration_manager.previous_stage_name,
-                "predicted_next_stage",
-                self.configuration_name,
-            )
-            if self.is_cascaded
-            else None
+            self.previous_stage if self.is_cascaded else None
         )
 
         ### Some hyperparameters for you to fiddle with

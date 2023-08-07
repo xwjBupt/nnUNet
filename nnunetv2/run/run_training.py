@@ -1,7 +1,7 @@
 import os
 import socket
 from typing import Union, Optional
-
+import pdb
 import nnunetv2
 import torch.cuda
 import torch.distributed as dist
@@ -13,7 +13,10 @@ from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.utilities.dataset_name_id_conversion import maybe_convert_to_dataset_name
 from nnunetv2.utilities.find_class_by_name import recursive_find_python_class
 from torch.backends import cudnn
-
+from nnunetv2.inference.predict_from_raw_data import predict_entry_point_function
+from nnunetv2.evaluation.evaluate_predictions import (
+    evaluate_folder_entry_point_function,
+)
 from git import Repo
 import glob
 import yaml
@@ -327,6 +330,7 @@ def run_training(
             nnunet_trainer.run_training()
 
         nnunet_trainer.perform_actual_validation(export_validation_probabilities)
+        return nnunet_trainer
 
 
 def run_training_entry():
@@ -334,18 +338,25 @@ def run_training_entry():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "dataset_name_or_id", type=str, help="Dataset name or ID to train with"
+        "--dataset_name_or_id",
+        default="515",
+        type=str,
+        help="Dataset name or ID to train with",
     )
     parser.add_argument(
-        "configuration", type=str, help="Configuration that should be trained"
+        "--configuration",
+        default="2d",
+        type=str,
+        help="Configuration that should be trained",
     )
     parser.add_argument(
-        "fold",
+        "--fold",
+        default="all",
         type=str,
         help="Fold of the 5-fold cross-validation. Should be an int between 0 and 4.",
     )
     parser.add_argument(
-        "commit_info",
+        "--commit_info",
         default="DEBUG",
         type=str,
         help="description of this experiment",
@@ -470,7 +481,6 @@ def run_training_entry():
         ]
     else:
         record_commit_info = [commit_info, commit_info, False]
-
     run_training(
         args.dataset_name_or_id,
         args.configuration,
@@ -488,6 +498,35 @@ def run_training_entry():
         record_commit_info=record_commit_info,
         previous_stage=args.previous_stage,
     )
+
+    # if nnunet_trainer:
+    #     nnunet_trainer.print_to_log_file("\n\n\n>>>> train done start to predict")
+    # predict_img_dir = glob.glob(
+    #     os.environ.get("nnUNet_raw")
+    #     + "/Dataset*"
+    #     + args.dataset_name_or_id
+    #     + "*/imagesTs"
+    # )[0]
+    # predict_img_gt_dir = predict_img_dir.replace("imagesTs", "labelTs")
+
+    # predict_flag = predict_entry_point_function(
+    #     i=predict_img_dir,
+    #     o=nnunet_trainer.output_folder,
+    #     d=args.dataset_name_or_id,
+    #     c=args.c,
+    #     f=args.fold,
+    #     nnunet_trainer=nnunet_trainer,
+    # )
+    # if predict_flag:
+    #     if nnunet_trainer:
+    #         nnunet_trainer.print_to_log_file(
+    #             "\n\n\n >>>>predict done start to evaluate"
+    #         )
+    #     evaluate_folder_entry_point_function(
+    #         pred_folder=nnunet_trainer.output_folder,
+    #         gt_folder=predict_img_gt_dir,
+    #         nnunet_trainer=nnunet_trainer,
+    #     )
 
 
 if __name__ == "__main__":

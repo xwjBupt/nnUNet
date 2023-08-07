@@ -3,7 +3,7 @@ import os
 from copy import deepcopy
 from multiprocessing import Pool
 from typing import Tuple, List, Union, Optional
-
+import csv
 import numpy as np
 from batchgenerators.utilities.file_and_folder_operations import (
     subfiles,
@@ -23,6 +23,15 @@ from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
 # the Evaluator class of the previous nnU-Net was great and all but man was it overengineered. Keep it simple
 from nnunetv2.utilities.json_export import recursive_fix_for_json_export
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
+
+
+def write_to_csv(filename, content):
+    file_exist = os.path.exists(filename)
+    with open(filename, "a+", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=content.keys())
+        if not file_exist:
+            writer.writeheader()
+        writer.writerow(content)
 
 
 def label_or_region_to_key(label_or_region: Union[int, Tuple[int]]):
@@ -214,7 +223,6 @@ def compute_metrics_on_folder(
     if output_file is not None:
         save_summary_json(result, output_file)
     return result
-    # print('DONE')
 
 
 def compute_metrics_on_folder2(
@@ -239,7 +247,7 @@ def compute_metrics_on_folder2(
         output_file = join(folder_pred, "summary.json")
 
     lm = PlansManager(plans_file).get_label_manager(dataset_json)
-    compute_metrics_on_folder(
+    result = compute_metrics_on_folder(
         folder_ref,
         folder_pred,
         output_file,
@@ -250,6 +258,7 @@ def compute_metrics_on_folder2(
         num_processes,
         chill=chill,
     )
+    return result
 
 
 def compute_metrics_on_folder_simple(
@@ -269,7 +278,7 @@ def compute_metrics_on_folder_simple(
     # maybe auto set output file
     if output_file is None:
         output_file = join(folder_pred, "summary.json")
-    compute_metrics_on_folder(
+    result = compute_metrics_on_folder(
         folder_ref,
         folder_pred,
         output_file,
@@ -280,18 +289,27 @@ def compute_metrics_on_folder_simple(
         num_processes=num_processes,
         chill=chill,
     )
+    return result
 
 
 def evaluate_folder_entry_point():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("gt_folder", type=str, help="folder with gt segmentations")
     parser.add_argument(
-        "pred_folder", type=str, help="folder with predicted segmentations"
+        "--pred_folder",
+        type=str,
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__2d/8_4#22_52@2d_epoch1000/fold_all/infer_all_checkpoint_final.pth",
+        help="folder with predicted segmentations",
     )
-    parser.add_argument("-djfile", type=str, required=True, help="dataset.json file")
-    parser.add_argument("-pfile", type=str, required=True, help="plans.json file")
+    parser.add_argument(
+        "--gt_folder",
+        type=str,
+        default="/ai/mnt/code/nnUNet/nnUNet_raw/Dataset515_ICH2023/labelsTs",
+        help="folder with gt segmentations ",
+    )
+    # parser.add_argument("-djfile", type=str, required=False, help="dataset.json file")
+    # parser.add_argument("-pfile", type=str, required=False, help="plans.json file")
     parser.add_argument(
         "-o",
         type=str,
@@ -312,15 +330,97 @@ def evaluate_folder_entry_point():
         help="dont crash if folder_pred doesnt have all files that are present in folder_gt",
     )
     args = parser.parse_args()
-    compute_metrics_on_folder2(
+    djfile = os.path.join(
+        os.path.dirname(os.path.dirname(args.pred_folder)), "dataset.json"
+    )
+    pfile = os.path.join(
+        os.path.dirname(os.path.dirname(args.pred_folder)), "plans.json"
+    )
+    result = compute_metrics_on_folder2(
         args.gt_folder,
         args.pred_folder,
-        args.djfile,
-        args.pfile,
+        djfile,
+        pfile,
         args.o,
         args.np,
         chill=args.chill,
     )
+    csvname = os.path.join(args.pred_folder.split("nnUNetTrainer")[0], "RESULT.csv")
+    content = {}
+    content["METHOD"] = args.pred_folder.split("nnUNetTrainer__nnUNetPlans__")[-1]
+    content.update(result.get("foreground_mean"))
+    write_to_csv(csvname, content)
+    print("DONE with result as {}".format(content))
+
+
+def evaluate_folder_entry_point_function(pred_folder, gt_folder, nnunet_trainer=None):
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--pred_folder",
+        type=str,
+        default="NOT IMPLEMENTED",
+        help="folder with predicted segmentations",
+    )
+    parser.add_argument(
+        "--gt_folder",
+        type=str,
+        default="NOT IMPLEMENTED",
+        help="folder with gt segmentations ",
+    )
+    # parser.add_argument("-djfile", type=str, required=False, help="dataset.json file")
+    # parser.add_argument("-pfile", type=str, required=False, help="plans.json file")
+    parser.add_argument(
+        "-o",
+        type=str,
+        required=False,
+        default=None,
+        help="Output file. Optional. Default: pred_folder/summary.json",
+    )
+    parser.add_argument(
+        "-np",
+        type=int,
+        required=False,
+        default=default_num_processes,
+        help=f"number of processes used. Optional. Default: {default_num_processes}",
+    )
+    parser.add_argument(
+        "--chill",
+        action="store_true",
+        help="dont crash if folder_pred doesnt have all files that are present in folder_gt",
+    )
+    args = parser.parse_args()
+    args.pred_folder = pred_folder
+    args.gt_folder = gt_folder
+    if args.pred_folder == "NOT IMPLEMENTED" or args.gt_folder == "NOT IMPLEMENTED":
+        assert False, "NOT IMPLEMENTED in evaluate_folder_entry_point_function"
+        return False
+    djfile = os.path.join(
+        os.path.dirname(os.path.dirname(args.pred_folder)), "dataset.json"
+    )
+    pfile = os.path.join(
+        os.path.dirname(os.path.dirname(args.pred_folder)), "plans.json"
+    )
+
+    result = compute_metrics_on_folder2(
+        args.gt_folder,
+        args.pred_folder,
+        djfile,
+        pfile,
+        args.o,
+        args.np,
+        chill=args.chill,
+    )
+    csvname = os.path.join(args.pred_folder.split("nnUNetTrainer")[0], "RESULT.csv")
+    content = {}
+    content["METHOD"] = args.pred_folder.split("nnUNetTrainer__nnUNetPlans__")[-1]
+    content.update(result.get("foreground_mean"))
+    write_to_csv(csvname, content)
+    if nnunet_trainer:
+        nnunet_trainer.print_to_log_file("DONE with result as {}\n\n".format(content))
+    else:
+        print("DONE with result as {}\n\n".format(content))
 
 
 def evaluate_simple_entry_point():
@@ -368,21 +468,22 @@ def evaluate_simple_entry_point():
 
 
 if __name__ == "__main__":
-    folder_ref = "/media/fabian/data/nnUNet_raw/Dataset004_Hippocampus/labelsTr"
-    folder_pred = "/home/fabian/results/nnUNet_remake/Dataset004_Hippocampus/nnUNetModule__nnUNetPlans__3d_fullres/fold_0/validation"
-    output_file = "/home/fabian/results/nnUNet_remake/Dataset004_Hippocampus/nnUNetModule__nnUNetPlans__3d_fullres/fold_0/validation/summary.json"
-    image_reader_writer = SimpleITKIO()
-    file_ending = ".nii.gz"
-    regions = labels_to_list_of_regions([1, 2])
-    ignore_label = None
-    num_processes = 12
-    compute_metrics_on_folder(
-        folder_ref,
-        folder_pred,
-        output_file,
-        image_reader_writer,
-        file_ending,
-        regions,
-        ignore_label,
-        num_processes,
-    )
+    # folder_ref = "/media/fabian/data/nnUNet_raw/Dataset004_Hippocampus/labelsTr"
+    # folder_pred = "/home/fabian/results/nnUNet_remake/Dataset004_Hippocampus/nnUNetModule__nnUNetPlans__3d_fullres/fold_0/validation"
+    # output_file = "/home/fabian/results/nnUNet_remake/Dataset004_Hippocampus/nnUNetModule__nnUNetPlans__3d_fullres/fold_0/validation/summary.json"
+    # image_reader_writer = SimpleITKIO()
+    # file_ending = ".nii.gz"
+    # regions = labels_to_list_of_regions([1, 2])
+    # ignore_label = None
+    # num_processes = 12
+    # compute_metrics_on_folder(
+    #     folder_ref,
+    #     folder_pred,
+    #     output_file,
+    #     image_reader_writer,
+    #     file_ending,
+    #     regions,
+    #     ignore_label,
+    #     num_processes,
+    # )
+    evaluate_folder_entry_point()

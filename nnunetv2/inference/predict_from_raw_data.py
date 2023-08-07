@@ -12,6 +12,9 @@ import nnunetv2
 import numpy as np
 import torch
 import time
+from nnunetv2.evaluation.evaluate_predictions import (
+    evaluate_folder_entry_point_function,
+)
 from batchgenerators.dataloading.data_loader import DataLoader
 from batchgenerators.dataloading.multi_threaded_augmenter import MultiThreadedAugmenter
 from batchgenerators.transforms.utility_transforms import NumpyToTensor
@@ -750,7 +753,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__2d/8_4#22_52@2d_epoch1000",
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_fullres/8_4#22_52@3d_fullres_epoch1000",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
@@ -780,7 +783,7 @@ def predict_entry_point():
         "-c",
         type=str,
         required=False,
-        default="2d",
+        default="3d_fullres",
         help="nnU-Net configuration that should be used for prediction. Config must be located "
         "in the plans specified with -p",
     )
@@ -951,7 +954,265 @@ def predict_entry_point():
             print("sleep for 30s and wait background process to be done")
             time.sleep(30)
             print("sleep for 30s done, continue")
+            evaluate_folder_entry_point_function(
+                pred_folder=output_dir,
+                gt_folder=args.i.replace("imagesTs", "labelsTs"),
+                nnunet_trainer=None,
+            )
     print(">>> ALL DONE <<<")
+
+
+def predict_entry_point_function(i, o, d, c, f, nnunet_trainer=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Use this to run inference with nnU-Net. This function is used when "
+        "you want to manually specify a folder containing a trained nnU-Net "
+        "model. This is useful when the nnunet environment variables "
+        "(nnUNet_results) are not set."
+    )
+    parser.add_argument(
+        "-i",
+        type=str,
+        default="NOT IMPLEMETED",
+        help="input folder. Remember to use the correct channel numberings for your files (_0000 etc). "
+        "File endings must be the same as the training dataset!",
+    )
+    parser.add_argument(
+        "-o",
+        type=str,
+        required=False,
+        default="NOT IMPLEMETED",
+        help="Output folder. If it does not exist it will be created. Predicted segmentations will "
+        "have the same name as their source images.",
+    )
+    parser.add_argument(
+        "-d",
+        type=str,
+        required=False,
+        default="NOT IMPLEMETED",
+        help="Dataset with which you would like to predict. You can specify either dataset name or id",
+    )
+    parser.add_argument(
+        "-p",
+        type=str,
+        required=False,
+        default="nnUNetPlans",
+        help="Plans identifier. Specify the plans in which the desired configuration is located. "
+        "Default: nnUNetPlans",
+    )
+    parser.add_argument(
+        "-tr",
+        type=str,
+        required=False,
+        default="nnUNetTrainer",
+        help="What nnU-Net trainer class was used for training? Default: nnUNetTrainer",
+    )
+    parser.add_argument(
+        "-c",
+        type=str,
+        required=False,
+        default="NOT IMPLEMETED",
+        help="nnU-Net configuration that should be used for prediction. Config must be located "
+        "in the plans specified with -p",
+    )
+    parser.add_argument(
+        "-f",
+        type=str,
+        required=False,
+        default="NOT IMPLEMETED",
+        help="Specify the folds of the trained model that should be used for prediction. "
+        "Default: '01234' or 'all'",
+    )
+    parser.add_argument(
+        "-step_size",
+        type=float,
+        required=False,
+        default=0.5,
+        help="Step size for sliding window prediction. The larger it is the faster but less accurate "
+        "the prediction. Default: 0.5. Cannot be larger than 1. We recommend the default.",
+    )
+    parser.add_argument(
+        "--disable_tta",
+        action="store_true",
+        required=False,
+        default=False,
+        help="Set this flag to disable test time data augmentation in the form of mirroring. Faster, "
+        "but less accurate inference. Not recommended.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Set this if you like being talked to. You will have "
+        "to be a good listener/reader.",
+    )
+    parser.add_argument(
+        "--save_probabilities",
+        action="store_true",
+        help='Set this to export predicted class "probabilities". Required if you want to ensemble '
+        "multiple configurations.",
+    )
+    parser.add_argument(
+        "--continue_prediction",
+        action="store_true",
+        help="Continue an aborted previous prediction (will not overwrite existing files)",
+    )
+    parser.add_argument(
+        "-chk",
+        type=list,
+        required=False,
+        default=["checkpoint_final.pth", "checkpoint_best.pth"],
+        help="Name of the checkpoint you want to use. Default: [checkpoint_best.pth, checkpoint_final.pth]",
+    )
+    parser.add_argument(
+        "-npp",
+        type=int,
+        required=False,
+        default=2,
+        help="Number of processes used for preprocessing. More is not always better. Beware of "
+        "out-of-RAM issues. Default: 3",
+    )
+    parser.add_argument(
+        "-nps",
+        type=int,
+        required=False,
+        default=2,
+        help="Number of processes used for segmentation export. More is not always better. Beware of "
+        "out-of-RAM issues. Default: 3",
+    )
+    parser.add_argument(
+        "-prev_stage_predictions",
+        type=str,
+        required=False,
+        default=None,
+        help="Folder containing the predictions of the previous stage. Required for cascaded models.",
+    )
+    parser.add_argument(
+        "-num_parts",
+        type=int,
+        required=False,
+        default=1,
+        help="Number of separate nnUNetv2_predict call that you will be making. Default: 1 (= this one "
+        "call predicts everything)",
+    )
+    parser.add_argument(
+        "-part_id",
+        type=int,
+        required=False,
+        default=0,
+        help="If multiple nnUNetv2_predict exist, which one is this? IDs start with 0 can end with "
+        "num_parts - 1. So when you submit 5 nnUNetv2_predict calls you need to set -num_parts "
+        "5 and use -part_id 0, 1, 2, 3 and 4. Simple, right? Note: You are yourself responsible "
+        "to make these run on separate GPUs! Use CUDA_VISIBLE_DEVICES (google, yo!)",
+    )
+    parser.add_argument(
+        "-device",
+        type=str,
+        default="cuda",
+        required=False,
+        help="Use this to set the device the inference should run with. Available options are 'cuda' "
+        "(GPU), 'cpu' (CPU) and 'mps' (Apple M1/M2). Do NOT use this to set which GPU ID! "
+        "Use CUDA_VISIBLE_DEVICES=X nnUNetv2_predict [...] instead!",
+    )
+
+    args = parser.parse_args()
+    args.f = f
+    args.i = i
+    args.o = o
+    args.c = c
+    args.d = d
+    if args.i == "NOT IMPLEMETED":
+        assert False, "NOT IMPLEMETED in predict_entry_point_function"
+        return False
+    assert args.device in [
+        "cpu",
+        "cuda",
+        "mps",
+    ], f"-device must be either cpu, mps or cuda. Other devices are not tested/supported. Got: {args.device}."
+    if args.device == "cpu":
+        # let's allow torch to use hella threads
+        import multiprocessing
+
+        torch.set_num_threads(multiprocessing.cpu_count())
+        device = torch.device("cpu")
+    elif args.device == "cuda":
+        # multithreading in torch doesn't help nnU-Net if run on GPU
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+        device = torch.device("cuda")
+    else:
+        device = torch.device("mps")
+
+    if args.f != "all":
+        args.f = [int(i) for i in args.f]
+    else:
+        args.f = ["all"]
+    print(args)
+
+    # model_folder = get_output_folder(args.d, args.tr, args.p, args.c)
+    for chk in args.chk:
+        ### change by xwj start ####
+        if nnunet_trainer:
+            nnunet_trainer.print_to_log_file(">>> START INFER ON {} <<<".format(chk))
+        else:
+            print(">>> START INFER ON {} <<<".format(chk))
+        model_folder = args.o
+        for f in args.f:
+            copy_jsons_to_output_dir(model_folder)
+            output_dir = join(model_folder, f"fold_{f}", f"infer_{f}_{chk}")
+            if nnunet_trainer:
+                nnunet_trainer.print_to_log_file("SAVE to {}".format(output_dir))
+            else:
+                print("SAVE to {}".format(output_dir))
+
+            ### change by xwj done ####
+
+            if not isdir(output_dir):
+                maybe_mkdir_p(output_dir)
+
+            # slightly passive agressive haha
+            assert (
+                args.part_id < args.num_parts
+            ), "Do you even read the documentation? See nnUNetv2_predict -h."
+
+            predict_from_raw_data(
+                args.i,
+                output_dir,
+                model_folder,
+                args.f,
+                args.step_size,
+                use_gaussian=True,
+                use_mirroring=not args.disable_tta,
+                perform_everything_on_gpu=True,
+                verbose=args.verbose,
+                save_probabilities=args.save_probabilities,
+                overwrite=not args.continue_prediction,
+                checkpoint_name=chk,
+                num_processes_preprocessing=args.npp,
+                num_processes_segmentation_export=args.nps,
+                folder_with_segs_from_prev_stage=args.prev_stage_predictions,
+                num_parts=args.num_parts,
+                part_id=args.part_id,
+                device=device,
+            )
+            if nnunet_trainer:
+                nnunet_trainer.print_to_log_file(">>> STOP INFER ON {} <<<".format(chk))
+                nnunet_trainer.print_to_log_file(
+                    "sleep for 30s and wait background process to be done"
+                )
+                time.sleep(30)
+                nnunet_trainer.print_to_log_file("sleep for 30s done, continue")
+            else:
+                print(">>> STOP INFER ON {} <<<".format(chk))
+                print("sleep for 30s and wait background process to be done")
+                time.sleep(30)
+                print("sleep for 30s done, continue")
+
+    if nnunet_trainer:
+        nnunet_trainer.print_to_log_file(">>> ALL DONE <<<")
+    else:
+        print(">>> ALL DONE <<<")
+    return True
 
 
 if __name__ == "__main__":

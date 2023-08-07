@@ -11,6 +11,7 @@ import glob
 import nnunetv2
 import numpy as np
 import torch
+import time
 from batchgenerators.dataloading.data_loader import DataLoader
 from batchgenerators.dataloading.multi_threaded_augmenter import MultiThreadedAugmenter
 from batchgenerators.transforms.utility_transforms import NumpyToTensor
@@ -740,21 +741,24 @@ def predict_entry_point():
     parser.add_argument(
         "-i",
         type=str,
-        required=True,
+        required=False,
+        default="/ai/mnt/code/nnUNet/nnUNet_raw/Dataset515_ICH2023/imagesTs",
         help="input folder. Remember to use the correct channel numberings for your files (_0000 etc). "
         "File endings must be the same as the training dataset!",
     )
     parser.add_argument(
         "-o",
         type=str,
-        required=True,
+        required=False,
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__2d/8_4#22_52@2d_epoch1000",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
     parser.add_argument(
         "-d",
         type=str,
-        required=True,
+        required=False,
+        default="513",
         help="Dataset with which you would like to predict. You can specify either dataset name or id",
     )
     parser.add_argument(
@@ -775,18 +779,18 @@ def predict_entry_point():
     parser.add_argument(
         "-c",
         type=str,
-        required=True,
+        required=False,
+        default="2d",
         help="nnU-Net configuration that should be used for prediction. Config must be located "
         "in the plans specified with -p",
     )
     parser.add_argument(
         "-f",
-        nargs="+",
         type=str,
         required=False,
-        default=(0, 1, 2, 3, 4),
+        default="all",
         help="Specify the folds of the trained model that should be used for prediction. "
-        "Default: (0, 1, 2, 3, 4)",
+        "Default: '01234' or 'all'",
     )
     parser.add_argument(
         "-step_size",
@@ -825,7 +829,7 @@ def predict_entry_point():
         "-chk",
         type=list,
         required=False,
-        default=["checkpoint_best.pth", "checkpoint_final.pth"],
+        default=["checkpoint_final.pth", "checkpoint_best.pth"],
         help="Name of the checkpoint you want to use. Default: [checkpoint_best.pth, checkpoint_final.pth]",
     )
     parser.add_argument(
@@ -880,99 +884,109 @@ def predict_entry_point():
     )
 
     args = parser.parse_args()
-    args.f = [i if i == "all" else int(i) for i in args.f]
+    assert args.device in [
+        "cpu",
+        "cuda",
+        "mps",
+    ], f"-device must be either cpu, mps or cuda. Other devices are not tested/supported. Got: {args.device}."
+    if args.device == "cpu":
+        # let's allow torch to use hella threads
+        import multiprocessing
+
+        torch.set_num_threads(multiprocessing.cpu_count())
+        device = torch.device("cpu")
+    elif args.device == "cuda":
+        # multithreading in torch doesn't help nnU-Net if run on GPU
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+        device = torch.device("cuda")
+    else:
+        device = torch.device("mps")
+
+    if args.f != "all":
+        args.f = [int(i) for i in args.f]
+    else:
+        args.f = ["all"]
     print(args)
     # model_folder = get_output_folder(args.d, args.tr, args.p, args.c)
     for chk in args.chk:
         ### change by xwj start ####
+        print(">>> START INFER ON {} <<<".format(chk))
         model_folder = args.o
-        if args.f is not None:
-            for f in args.f:
-                copy_jsons_to_output_dir(model_folder)
-                args.o = join(model_folder, f"fold_{f}", f"infer_{f}_{chk}")
-        ### change by xwj done ####
+        for f in args.f:
+            copy_jsons_to_output_dir(model_folder)
+            output_dir = join(model_folder, f"fold_{f}", f"infer_{f}_{chk}")
+            print("SAVE to {}".format(output_dir))
+            ### change by xwj done ####
 
-        if not isdir(args.o):
-            maybe_mkdir_p(args.o)
+            if not isdir(output_dir):
+                maybe_mkdir_p(output_dir)
 
-        # slightly passive agressive haha
-        assert (
-            args.part_id < args.num_parts
-        ), "Do you even read the documentation? See nnUNetv2_predict -h."
+            # slightly passive agressive haha
+            assert (
+                args.part_id < args.num_parts
+            ), "Do you even read the documentation? See nnUNetv2_predict -h."
 
-        assert args.device in [
-            "cpu",
-            "cuda",
-            "mps",
-        ], f"-device must be either cpu, mps or cuda. Other devices are not tested/supported. Got: {args.device}."
-        if args.device == "cpu":
-            # let's allow torch to use hella threads
-            import multiprocessing
-
-            torch.set_num_threads(multiprocessing.cpu_count())
-            device = torch.device("cpu")
-        elif args.device == "cuda":
-            # multithreading in torch doesn't help nnU-Net if run on GPU
-            torch.set_num_threads(1)
-            torch.set_num_interop_threads(1)
-            device = torch.device("cuda")
-        else:
-            device = torch.device("mps")
-
-        predict_from_raw_data(
-            args.i,
-            args.o,
-            model_folder,
-            args.f,
-            args.step_size,
-            use_gaussian=True,
-            use_mirroring=not args.disable_tta,
-            perform_everything_on_gpu=True,
-            verbose=args.verbose,
-            save_probabilities=args.save_probabilities,
-            overwrite=not args.continue_prediction,
-            checkpoint_name=chk,
-            num_processes_preprocessing=args.npp,
-            num_processes_segmentation_export=args.nps,
-            folder_with_segs_from_prev_stage=args.prev_stage_predictions,
-            num_parts=args.num_parts,
-            part_id=args.part_id,
-            device=device,
-        )
+            predict_from_raw_data(
+                args.i,
+                output_dir,
+                model_folder,
+                args.f,
+                args.step_size,
+                use_gaussian=True,
+                use_mirroring=not args.disable_tta,
+                perform_everything_on_gpu=True,
+                verbose=args.verbose,
+                save_probabilities=args.save_probabilities,
+                overwrite=not args.continue_prediction,
+                checkpoint_name=chk,
+                num_processes_preprocessing=args.npp,
+                num_processes_segmentation_export=args.nps,
+                folder_with_segs_from_prev_stage=args.prev_stage_predictions,
+                num_parts=args.num_parts,
+                part_id=args.part_id,
+                device=device,
+            )
+            print(">>> STOP INFER ON {} <<<".format(chk))
+            print("sleep for 30s and wait background process to be done")
+            time.sleep(30)
+            print("sleep for 30s done, continue")
+    print(">>> ALL DONE <<<")
 
 
 if __name__ == "__main__":
-    predict_from_raw_data(
-        "/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs",
-        "/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs_predlowres",
-        "/home/fabian/results/nnUNet_remake/Dataset003_Liver/nnUNetTrainer__nnUNetPlans__3d_lowres",
-        (0,),
-        0.5,
-        use_gaussian=True,
-        use_mirroring=False,
-        perform_everything_on_gpu=True,
-        verbose=True,
-        save_probabilities=False,
-        overwrite=False,
-        checkpoint_name="checkpoint_final.pth",
-        num_processes_preprocessing=3,
-        num_processes_segmentation_export=3,
-    )
+    predict_entry_point()
+    # predict_from_raw_data(
+    #     "/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs",
+    #     "/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs_predlowres",
+    #     "/home/fabian/results/nnUNet_remake/Dataset003_Liver/nnUNetTrainer__nnUNetPlans__3d_lowres",
+    #     (0,),
+    #     0.5,
+    #     use_gaussian=True,
+    #     use_mirroring=False,
+    #     perform_everything_on_gpu=True,
+    #     verbose=True,
+    #     save_probabilities=False,
+    #     overwrite=False,
+    #     checkpoint_name="checkpoint_final.pth",
+    #     num_processes_preprocessing=3,
+    #     num_processes_segmentation_export=3,
+    # )
 
-    predict_from_raw_data(
-        "/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs",
-        "/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs_predCascade",
-        "/home/fabian/results/nnUNet_remake/Dataset003_Liver/nnUNetTrainer__nnUNetPlans__3d_cascade_fullres",
-        (0,),
-        0.5,
-        use_gaussian=True,
-        use_mirroring=False,
-        perform_everything_on_gpu=True,
-        verbose=True,
-        save_probabilities=False,
-        overwrite=True,
-        checkpoint_name="checkpoint_final.pth",
-        num_processes_preprocessing=2,
-        num_processes_segmentation_export=2,
-        folder_with_segs_from_prev_stage="/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs_predlowres",
-    )
+    # predict_from_raw_data(
+    #     "/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs",
+    #     "/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs_predCascade",
+    #     "/home/fabian/results/nnUNet_remake/Dataset003_Liver/nnUNetTrainer__nnUNetPlans__3d_cascade_fullres",
+    #     (0,),
+    #     0.5,
+    #     use_gaussian=True,
+    #     use_mirroring=False,
+    #     perform_everything_on_gpu=True,
+    #     verbose=True,
+    #     save_probabilities=False,
+    #     overwrite=True,
+    #     checkpoint_name="checkpoint_final.pth",
+    #     num_processes_preprocessing=2,
+    #     num_processes_segmentation_export=2,
+    #     folder_with_segs_from_prev_stage="/media/fabian/data/nnUNet_raw/Dataset003_Liver/imagesTs_predlowres",
+    # )

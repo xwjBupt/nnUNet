@@ -245,6 +245,11 @@ If you wish to manually specify the configuration(s) used for inference, use the
 For each of the desired configurations, run:
 ```
 nnUNetv2_predict -i INPUT_FOLDER -o OUTPUT_FOLDER -d DATASET_NAME_OR_ID -c CONFIGURATION --save_probabilities
+
+<<<XWJ VERSION START>>>
+nnUNetv2_predict -i INPUT_FOLDER -o /ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__2d/8_4#22_52@2d_epoch1000 -d DATASET_NAME_OR_ID -c CONFIGURATION --save_probabilities
+<<<XWJ VERSION START>>>
+
 ```
 
 Only specify `--save_probabilities` if you intend to use ensembling. `--save_probabilities` will make the command save the predicted

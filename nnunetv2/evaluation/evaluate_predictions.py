@@ -418,9 +418,11 @@ def evaluate_folder_entry_point_function(pred_folder, gt_folder, nnunet_trainer=
     content.update(result.get("foreground_mean"))
     write_to_csv(csvname, content)
     if nnunet_trainer:
-        nnunet_trainer.print_to_log_file("DONE with result as {}\n\n".format(content))
+        nnunet_trainer.print_to_log_file(
+            "{} DONE with result as {}\n\n".format(args.pred_folder, content)
+        )
     else:
-        print("DONE with result as {}\n\n".format(content))
+        print("{} DONE with result as {}\n\n".format(args.pred_folder, content))
 
 
 def evaluate_simple_entry_point():

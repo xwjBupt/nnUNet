@@ -753,7 +753,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_fullres/8_4#22_52@3d_fullres_epoch1000",
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_cascade_fullres/8_7#10_19@3d_cascade_fullres_epoch1000",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
@@ -761,7 +761,7 @@ def predict_entry_point():
         "-d",
         type=str,
         required=False,
-        default="513",
+        default="515",
         help="Dataset with which you would like to predict. You can specify either dataset name or id",
     )
     parser.add_argument(
@@ -783,7 +783,7 @@ def predict_entry_point():
         "-c",
         type=str,
         required=False,
-        default="3d_fullres",
+        default="3d_cascade_fullres",
         help="nnU-Net configuration that should be used for prediction. Config must be located "
         "in the plans specified with -p",
     )
@@ -855,7 +855,7 @@ def predict_entry_point():
         "-prev_stage_predictions",
         type=str,
         required=False,
-        default=None,
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_lowres/8_6#10_2@3d_lowres_epoch1000/fold_all/infer_all_checkpoint_best.pth",
         help="Folder containing the predictions of the previous stage. Required for cascaded models.",
     )
     parser.add_argument(
@@ -953,7 +953,9 @@ def predict_entry_point():
             print(">>> STOP INFER ON {} <<<".format(chk))
             print("sleep for 30s and wait background process to be done")
             time.sleep(30)
-            print("sleep for 30s done, continue")
+            print(
+                "sleep for 30s done, continue going to evaluate {}".format(output_dir)
+            )
             evaluate_folder_entry_point_function(
                 pred_folder=output_dir,
                 gt_folder=args.i.replace("imagesTs", "labelsTs"),

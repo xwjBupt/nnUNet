@@ -753,7 +753,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_cascade_fullres/8_7#10_19@3d_cascade_fullres_epoch1000",
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_fullres/8_21#16_43@3d_fullres_epoch1000_residual_encoder_unet",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
@@ -783,7 +783,7 @@ def predict_entry_point():
         "-c",
         type=str,
         required=False,
-        default="3d_cascade_fullres",
+        default="3d_fullres",
         help="nnU-Net configuration that should be used for prediction. Config must be located "
         "in the plans specified with -p",
     )
@@ -832,7 +832,7 @@ def predict_entry_point():
         "-chk",
         type=list,
         required=False,
-        default=["checkpoint_final.pth", "checkpoint_best.pth"],
+        default=["checkpoint_best.pth"],
         help="Name of the checkpoint you want to use. Default: [checkpoint_best.pth, checkpoint_final.pth]",
     )
     parser.add_argument(
@@ -855,7 +855,7 @@ def predict_entry_point():
         "-prev_stage_predictions",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_lowres/8_6#10_2@3d_lowres_epoch1000/fold_all/infer_all_checkpoint_best.pth",
+        default=None,
         help="Folder containing the predictions of the previous stage. Required for cascaded models.",
     )
     parser.add_argument(

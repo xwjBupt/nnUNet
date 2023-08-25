@@ -22,6 +22,7 @@ import glob
 import yaml
 import time
 import os
+import setproctitle
 
 
 def git_commit(
@@ -493,6 +494,7 @@ def run_training_entry():
         ]
     else:
         record_commit_info = [commit_info, commit_info, False]
+    setproctitle.setproctitle(commit_info)
     run_training(
         args.dataset_name_or_id,
         args.configuration,

@@ -394,7 +394,8 @@ def run_training_entry():
     )
     parser.add_argument(
         "--arc",
-        default="nnFormer",  # undeclared
+        default="undeclared",  # undeclared
+        type=str,
         help="weather to use custom networks",
     )
     parser.add_argument(

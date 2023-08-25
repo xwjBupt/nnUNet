@@ -90,6 +90,7 @@ def get_trainer_from_args(
     device: torch.device = torch.device("cuda"),
     record_commit_info: str = "record_commit_info",
     previous_stage: str = "previous_stage",
+    arc: str = "undeclared",
 ):
     # load nnunet class and do sanity checks
     nnunet_trainer = recursive_find_python_class(
@@ -137,6 +138,7 @@ def get_trainer_from_args(
         device=device,
         record_commit_info=record_commit_info,
         previous_stage=previous_stage,
+        arc=arc,
     )
     return nnunet_trainer
 
@@ -146,6 +148,7 @@ def maybe_load_checkpoint(
     continue_training: bool,
     validation_only: bool,
     pretrained_weights_file: str = None,
+    arc: str = "undeclared",
 ):
     if continue_training and pretrained_weights_file is not None:
         raise RuntimeError(
@@ -184,7 +187,7 @@ def maybe_load_checkpoint(
             if not nnunet_trainer.was_initialized:
                 nnunet_trainer.initialize()
             load_pretrained_weights(
-                nnunet_trainer.network, pretrained_weights_file, verbose=True
+                nnunet_trainer.network, pretrained_weights_file, arc=arc, verbose=True
             )
         expected_checkpoint_file = None
 
@@ -257,6 +260,7 @@ def run_training(
     device: torch.device = torch.device("cuda"),
     record_commit_info: str = "IN DEBUG DO NOT COMMIT",
     previous_stage: str = "previous_stage",
+    arc: str = "undeclared",
 ):
     if isinstance(fold, str):
         if fold != "all":
@@ -309,6 +313,7 @@ def run_training(
             device=device,
             record_commit_info=record_commit_info,
             previous_stage=previous_stage,
+            arc=arc,
         )
 
         if disable_checkpointing:
@@ -345,8 +350,9 @@ def run_training_entry():
     )
     parser.add_argument(
         "--configuration",
-        default="2d",
+        default="3d_lowres",
         type=str,
+        choices=["2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"],
         help="Configuration that should be trained",
     )
     parser.add_argument(
@@ -385,6 +391,11 @@ def run_training_entry():
         "--no_debug",
         action="store_true",
         help="weather in debug mode, given = no debug, not given  = in debug",
+    )
+    parser.add_argument(
+        "--arc",
+        default="nnFormer",  # undeclared
+        help="weather to use custom networks",
     )
     parser.add_argument(
         "-pretrained_weights",
@@ -497,6 +508,7 @@ def run_training_entry():
         device=device,
         record_commit_info=record_commit_info,
         previous_stage=args.previous_stage,
+        arc=args.arc,
     )
 
     # if nnunet_trainer:

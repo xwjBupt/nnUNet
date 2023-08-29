@@ -135,6 +135,7 @@ def get_custom_network_from_plans(
         "SwinUNETR": SwinUNETR,
         "nnFormer": nnFormer,
         "UNETR": UNETR,
+        "UXNET": UXNET,
     }
     # kwargs = {
     #     "PlainConvUNet": {

@@ -430,6 +430,7 @@ class UXNET(nn.Module):
         conv_block: bool = True,
         res_block: bool = True,
         spatial_dims=3,
+        deep_supervision=False,
     ) -> None:
         """
         Args:
@@ -473,7 +474,8 @@ class UXNET(nn.Module):
             self.out_indice.append(i)
 
         self.spatial_dims = spatial_dims
-
+        self.decoder = deep_supervision
+        self.deep_supervision = deep_supervision
         # self.classification = False
         # self.vit = ViT(
         #     in_channels=in_channels,
@@ -624,7 +626,9 @@ class UXNET(nn.Module):
         dec1 = self.decoder3(dec2, enc2)
         dec0 = self.decoder2(dec1, enc1)
         out = self.decoder1(dec0)
-
+        out = self.out(out)
         # feat = self.conv_proj(dec4)
-
-        return self.out(out)
+        if self.deep_supervision:
+            return [out]
+        else:
+            return out

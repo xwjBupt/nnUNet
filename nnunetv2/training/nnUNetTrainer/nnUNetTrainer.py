@@ -1153,11 +1153,57 @@ class nnUNetTrainer(object):
         chances you need to change this as well!
         """
         if self.is_ddp:
-            self.network.module.decoder.deep_supervision = enabled
-            self.network.deep_supervision = enabled
+            try:
+                self.network.module.decoder.deep_supervision = enabled
+            except Exception as e:
+                self.print_to_log_file(
+                    "Can not set module.decoder.deep_supervision as {} because of {}".format(
+                        enabled, e
+                    )
+                )
+            else:
+                self.print_to_log_file(
+                    "succesfully set module.decoder.deep_supervision as {}".format(
+                        enabled
+                    )
+                )
+            try:
+                self.network.deep_supervision = enabled
+            except Exception as e:
+                self.print_to_log_file(
+                    "Can not set network.deep_supervision as {} because of {}".format(
+                        enabled, e
+                    )
+                )
+            else:
+                self.print_to_log_file(
+                    "succesfully set network.deep_supervision as {}".format(enabled)
+                )
         else:
-            self.network.decoder.deep_supervision = enabled
-            self.network.deep_supervision = enabled
+            try:
+                self.network.decoder.deep_supervision = enabled
+            except Exception as e:
+                self.print_to_log_file(
+                    "Can not set decoder.deep_supervision as {} because of {}".format(
+                        enabled, e
+                    )
+                )
+            else:
+                self.print_to_log_file(
+                    "succesfully set decoder.deep_supervision as {}".format(enabled)
+                )
+            try:
+                self.network.deep_supervision = enabled
+            except Exception as e:
+                self.print_to_log_file(
+                    "Can not set network.deep_supervision as {} because of {}".format(
+                        enabled, e
+                    )
+                )
+            else:
+                self.print_to_log_file(
+                    "succesfully set network.deep_supervision as {}".format(enabled)
+                )
 
     def on_train_start(self):
         if not self.was_initialized:

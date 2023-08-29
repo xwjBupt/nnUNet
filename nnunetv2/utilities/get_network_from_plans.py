@@ -246,26 +246,27 @@ def get_custom_network_from_plans(
                 spatial_dims=3,
             )
             model.apply(InitWeights_He(1e-2))
+            # some times use the command: rm -rf ~/.nv
     return model
 
 
 if __name__ == "__main__":
     dummy = torch.rand([2, 1, 16, 320, 320])
-    # model = UXNET(
-    #     in_chans=1,
-    #     out_chans=2,
-    #     depths=[2, 2, 2, 2],
-    #     feat_size=[48, 96, 192, 384],
-    #     drop_path_rate=0,
-    #     layer_scale_init_value=1e-6,
-    #     spatial_dims=3,
-    # )
-    model = SwinUNETR(
-        img_size=[16, 320, 320],
-        in_channels=1,
-        out_channels=2,
-        feature_size=48,
-        use_checkpoint=False,
+    model = UXNET(
+        in_chans=1,
+        out_chans=2,
+        depths=[2, 2, 2, 2],
+        feat_size=[48, 96, 192, 384],
+        drop_path_rate=0,
+        layer_scale_init_value=1e-6,
+        spatial_dims=3,
     )
+    # model = SwinUNETR(
+    #     img_size=[16, 320, 320],
+    #     in_channels=1,
+    #     out_channels=2,
+    #     feature_size=48,
+    #     use_checkpoint=False,
+    # )
     out = model(dummy)
     print(out.shape)

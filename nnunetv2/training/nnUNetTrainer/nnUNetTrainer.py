@@ -253,7 +253,7 @@ class nnUNetTrainer(object):
         if not record_commit_info[2]:
             self.num_epochs = 3
         else:
-            self.num_epochs = 1000
+            self.num_epochs = 2000
         self.current_epoch = 0
 
         ### Dealing with labels/regions

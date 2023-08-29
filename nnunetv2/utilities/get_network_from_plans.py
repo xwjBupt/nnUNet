@@ -15,11 +15,13 @@ from nnunetv2.utilities.plans_handling.plans_handler import (
     PlansManager,
 )
 from torch import nn
+import torch
 
 # from custom_networks.UXNet_3D.network_backbone import UXNET
 # from custom_networks.TransBTS.TransBTS_downsample8x_skipconnection import TransBTS
 from monai.networks.nets import UNETR, SwinUNETR
 from nnunetv2.custom_networks.nnformer.nnFormer_seg import nnFormer
+from nnunetv2.custom_networks.UXNet_3D.network_backbone import UXNET
 
 
 def get_network_from_plans(
@@ -217,4 +219,52 @@ def get_custom_network_from_plans(
                 deep_supervision=deep_supervision,
             )
             model.apply(InitWeights_He(1e-2))
+    if segmentation_network_class_name == "SwinUNETR":
+        if pretrain:
+            pass
+        else:
+            model = SwinUNETR(
+                img_size=configuration_manager.patch_size,
+                in_channels=input_channels,
+                out_channels=out_classes,
+                feature_size=48,
+                use_checkpoint=False,
+            )
+            model.apply(InitWeights_He(1e-2))
+    if segmentation_network_class_name == "UXNET":
+        if pretrain:
+            pass
+        else:
+            model = UXNET(
+                in_chans=input_channels,
+                out_chans=out_classes,
+                depths=[2, 2, 2, 2],
+                feat_size=[48, 96, 192, 384],
+                drop_path_rate=0,
+                layer_scale_init_value=1e-6,
+                spatial_dims=3,
+            )
+            model.apply(InitWeights_He(1e-2))
     return model
+
+
+if __name__ == "__main__":
+    dummy = torch.rand([2, 1, 16, 320, 320])
+    # model = UXNET(
+    #     in_chans=1,
+    #     out_chans=2,
+    #     depths=[2, 2, 2, 2],
+    #     feat_size=[48, 96, 192, 384],
+    #     drop_path_rate=0,
+    #     layer_scale_init_value=1e-6,
+    #     spatial_dims=3,
+    # )
+    model = SwinUNETR(
+        img_size=[16, 320, 320],
+        in_channels=1,
+        out_channels=2,
+        feature_size=48,
+        use_checkpoint=False,
+    )
+    out = model(dummy)
+    print(out.shape)

@@ -218,9 +218,18 @@ class MFNet(nn.Module):  #
     # [96]   Flops:  13.361G  &  Params: 1.81M
     # [112]  Flops:  16.759G  &  Params: 2.46M
     # [128]  Flops:  20.611G  &  Params: 3.19M
-    def __init__(self, c=4, n=32, channels=128, groups=16, norm="bn", num_classes=4):
+    def __init__(
+        self,
+        c=4,
+        n=32,
+        channels=128,
+        groups=16,
+        norm="bn",
+        num_classes=4,
+        deep_supervision=False,
+    ):
         super(MFNet, self).__init__()
-
+        self.deep_supervision = deep_supervision
         # Entry flow
         self.encoder_block1 = nn.Conv3d(
             c, n, kernel_size=3, padding=1, stride=2, bias=False
@@ -298,7 +307,10 @@ class MFNet(nn.Module):  #
         y4 = self.seg(y4)
         if hasattr(self, "softmax"):
             y4 = self.softmax(y4)
-        return y4
+        if self.deep_supervision:
+            return [y4]
+        else:
+            return y4
 
 
 class DMFNet(MFNet):  # softmax
@@ -313,8 +325,15 @@ class DMFNet(MFNet):  # softmax
         num_classes=1,
         deep_supervision=False,
     ):
-        super(DMFNet, self).__init__(c, n, channels, groups, norm, num_classes)
-        self.deep_supervision = deep_supervision
+        super(DMFNet, self).__init__(
+            c,
+            n,
+            channels,
+            groups,
+            norm,
+            num_classes,
+            deep_supervision,
+        )
         self.encoder_block2 = nn.Sequential(
             DMFUnit(
                 n, channels, g=groups, stride=2, norm=norm, dilation=[1, 2, 3]

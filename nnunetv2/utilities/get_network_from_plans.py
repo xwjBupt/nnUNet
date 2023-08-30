@@ -22,6 +22,7 @@ import torch
 from monai.networks.nets import UNETR, SwinUNETR
 from nnunetv2.custom_networks.nnformer.nnFormer_seg import nnFormer
 from nnunetv2.custom_networks.UXNet_3D.network_backbone import UXNET
+from nnunetv2.custom_networks.DMFNet import DMFNet
 
 
 def get_network_from_plans(
@@ -136,6 +137,7 @@ def get_custom_network_from_plans(
         "nnFormer": nnFormer,
         "UNETR": UNETR,
         "UXNET": UXNET,
+        "DMFNet": DMFNet,
     }
     # kwargs = {
     #     "PlainConvUNet": {
@@ -244,6 +246,17 @@ def get_custom_network_from_plans(
                 drop_path_rate=0,
                 layer_scale_init_value=1e-6,
                 spatial_dims=3,
+            )
+            model.apply(InitWeights_He(1e-2))
+            # some times use the command: rm -rf ~/.nv
+    if segmentation_network_class_name == "DMFNet":
+        if pretrain:
+            pass
+        else:
+            model = DMFNet(
+                c=input_channels,
+                num_classes=out_classes,
+                deep_supervision=deep_supervision,
             )
             model.apply(InitWeights_He(1e-2))
             # some times use the command: rm -rf ~/.nv

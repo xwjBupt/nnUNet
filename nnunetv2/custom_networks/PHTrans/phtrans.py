@@ -472,7 +472,7 @@ if __name__ == "__main__":
         img_size=[16, 320, 320],
         base_num_features=24,
         num_classes=2,
-        num_pool=7,
+        num_pool=6,
         image_channels=1,
         num_only_conv_stage=5,
         num_conv_per_stage=2,
@@ -495,7 +495,7 @@ if __name__ == "__main__":
             [3, 3, 3],
             [3, 3, 3],
         ],
-        deep_supervision=False,
+        deep_supervision=True,
         max_num_features=320,
         depths=[2, 2],
         num_heads=[2, 2],
@@ -509,8 +509,8 @@ if __name__ == "__main__":
         drop_path_rate=0.2,
         norm_layer=nn.LayerNorm,
         use_checkpoint=False,
-    ).cuda()
-    du = torch.randn([2, 1, 16, 320, 320]).cuda()
+    )
+    du = torch.randn([2, 1, 16, 320, 320])
     print(net)
     out = net(du)
     print(out.shape)

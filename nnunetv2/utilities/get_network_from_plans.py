@@ -23,6 +23,7 @@ from monai.networks.nets import UNETR, SwinUNETR
 from nnunetv2.custom_networks.nnformer.nnFormer_seg import nnFormer
 from nnunetv2.custom_networks.UXNet_3D.network_backbone import UXNET
 from nnunetv2.custom_networks.DMFNet import DMFNet
+from nnunetv2.custom_networks.PHTrans.phtrans import PHTrans
 
 
 def get_network_from_plans(
@@ -138,6 +139,7 @@ def get_custom_network_from_plans(
         "UNETR": UNETR,
         "UXNET": UXNET,
         "DMFNet": DMFNet,
+        "PHTrans": PHTrans,
     }
     # kwargs = {
     #     "PlainConvUNet": {
@@ -257,6 +259,31 @@ def get_custom_network_from_plans(
                 c=input_channels,
                 num_classes=out_classes,
                 deep_supervision=deep_supervision,
+            )
+            model.apply(InitWeights_He(1e-2))
+            # some times use the command: rm -rf ~/.nv
+    if segmentation_network_class_name == "PHTrans":
+        num_pool = len(configuration_manager.pool_op_kernel_sizes) - 1
+        num_only_conv_stage = 3
+        if pretrain:
+            pass
+        else:
+            model = PHTrans(
+                img_size=configuration_manager.patch_size,
+                base_num_features=configuration_manager.UNet_base_num_features,
+                num_classes=out_classes,
+                num_pool=num_pool,
+                image_channels=input_channels,
+                deep_supervision=deep_supervision,
+                max_num_features=configuration_manager.unet_max_num_features,
+                depths=[2 for i in range(num_pool - num_only_conv_stage)],
+                num_only_conv_stage=num_only_conv_stage,
+                num_heads=[4, 8, 8, 4],  # len(num_heads) = len(depths)
+                window_size=[4, 5, 5],
+                pool_op_kernel_sizes=configuration_manager.pool_op_kernel_sizes,
+                conv_kernel_sizes=configuration_manager.conv_kernel_sizes,
+                dropout_p=0.0,
+                drop_path_rate=0.2,
             )
             model.apply(InitWeights_He(1e-2))
             # some times use the command: rm -rf ~/.nv

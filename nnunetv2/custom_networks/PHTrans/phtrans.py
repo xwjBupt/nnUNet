@@ -458,7 +458,7 @@ class PHTrans(nn.Module):
             # if inx > 0:
             #     out.append(ds)
         if self.deep_supervision:
-            return out[::-1]
+            return [out[-1]]
         else:
             return out[-1]
 

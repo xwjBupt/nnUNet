@@ -276,16 +276,16 @@ def get_custom_network_from_plans(
                 image_channels=input_channels,
                 deep_supervision=deep_supervision,
                 max_num_features=configuration_manager.unet_max_num_features,
-                depths=[2 for i in range(num_pool - num_only_conv_stage)],
+                depths=[2 for i in range(num_pool - num_only_conv_stage + 1)],
                 num_only_conv_stage=num_only_conv_stage,
-                num_heads=[4, 8, 8, 4],  # len(num_heads) = len(depths)
+                num_heads=[4, 8, 8, 8],  # len(num_heads) = len(depths)
                 window_size=[4, 5, 5],
                 pool_op_kernel_sizes=configuration_manager.pool_op_kernel_sizes,
                 conv_kernel_sizes=configuration_manager.conv_kernel_sizes,
                 dropout_p=0.0,
                 drop_path_rate=0.2,
             )
-            model.apply(InitWeights_He(1e-2))
+            # model.apply(InitWeights_He(1e-2))
             # some times use the command: rm -rf ~/.nv
     return model
 

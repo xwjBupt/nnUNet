@@ -452,13 +452,14 @@ class PHTrans(nn.Module):
         for inx, layer in enumerate(self.up_layers):
             if inx > 0:
                 x, ds = layer(x, x_skip[self.num_pool - inx])
+                print(inx, ds.shape)
                 out.append(ds)
             else:
                 x, ds = layer(x, None)
             # if inx > 0:
             #     out.append(ds)
         if self.deep_supervision:
-            return [out[-1]]
+            return out[::-1]
         else:
             return out[-1]
 

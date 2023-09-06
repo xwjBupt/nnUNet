@@ -172,6 +172,7 @@ class nnUNetTrainer(object):
         self.configuration_manager = self.plans_manager.get_configuration(configuration)
         self.configuration_name = configuration
         self.dataset_json = dataset_json
+        self.plans_json = plans
         self.fold = fold
         self.unpack_dataset = unpack_dataset
         self.previous_stage = previous_stage
@@ -409,6 +410,8 @@ class nnUNetTrainer(object):
             dct["device"] = str(self.device)
             dct["torch_version"] = torch_version
             dct["cudnn_version"] = cudnn_version
+            dct["dataset_json"] = self.dataset_json
+            dct["plans_json"] = self.plans_json
             save_json(dct, join(self.output_folder, "debug.json"))
 
     @staticmethod

@@ -5,6 +5,7 @@ from typing import Callable, List, Optional, Tuple, Union
 cfg = CN()
 # cfg.arc = CN()
 # cfg.arc.name ='PHTrans'
-# cfg.PHTrans.Commit_Info = "Baseline"
-# cfg.PHTrans.Early_stop = 70
-# cfg.PHTrans.Epoch_dis = 15
+# cfg.para = CN()
+# cfg.para.Commit_Info = "Baseline"
+# cfg.para.Early_stop = 70
+# cfg.para.Epoch_dis = 15

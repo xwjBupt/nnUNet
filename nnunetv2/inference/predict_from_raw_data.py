@@ -15,6 +15,7 @@ import time
 from nnunetv2.evaluation.evaluate_predictions import (
     evaluate_folder_entry_point_function,
 )
+import glob
 from batchgenerators.dataloading.data_loader import DataLoader
 from batchgenerators.dataloading.multi_threaded_augmenter import MultiThreadedAugmenter
 from batchgenerators.transforms.utility_transforms import NumpyToTensor
@@ -133,11 +134,23 @@ def copy_jsons_to_output_dir(model_training_output_dir):
         shutil.copy(json, join(model_training_output_dir, json.split("/")[-1]))
 
 
-def load_what_we_need(model_training_output_dir, use_folds, checkpoint_name):
+def load_what_we_need(model_training_output_dir, use_folds, checkpoint_name, arc):
     # we could also load plans and dataset_json from the init arguments in the checkpoint. Not quite sure what is the
     # best method so we leave things as they are for the moment.
-    dataset_json = load_json(join(model_training_output_dir, "dataset.json"))
-    plans = load_json(join(model_training_output_dir, "plans.json"))
+
+    # debug_info = load_json(
+    #     glob.glob(join(model_training_output_dir, "fold*/debug.json"))[0]
+    # )
+    # dataset_json = (
+    #     debug_info.get("dataset_json")
+    #     if debug_info.get("dataset_json")
+    #     else load_json(join(model_training_output_dir, "dataset.json"))
+    # )
+    # plans = debug_info.get("plans_json") if debug_info.get("plans_json") else load_json(join(model_training_output_dir, "plans.json"))
+
+    dataset_json = load_json(join(model_training_output_dir, "dataset.json"))  # dict
+    plans = load_json(join(model_training_output_dir, "plans.json"))  # dict
+
     plans_manager = PlansManager(plans)
 
     if isinstance(use_folds, str):
@@ -177,7 +190,9 @@ def load_what_we_need(model_training_output_dir, use_folds, checkpoint_name):
         configuration_manager,
         num_input_channels,
         enable_deep_supervision=False,
+        arc=arc,
     )
+    print(network)
     return (
         parameters,
         configuration_manager,
@@ -222,6 +237,7 @@ def predict_from_raw_data(
     num_parts: int = 1,
     part_id: int = 0,
     device: torch.device = torch.device("cuda"),
+    arc: str = "undeclared",
 ):
     print(
         "\n#######################################################################\nPlease cite the following paper "
@@ -265,7 +281,7 @@ def predict_from_raw_data(
         dataset_json,
         network,
         trainer_name,
-    ) = load_what_we_need(model_training_output_dir, use_folds, checkpoint_name)
+    ) = load_what_we_need(model_training_output_dir, use_folds, checkpoint_name, arc)
 
     # check if we need a prediction from the previous stage
     if configuration_manager.previous_stage_name is not None:
@@ -753,7 +769,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_fullres/8_21#16_43@3d_fullres_epoch1000_residual_encoder_unet",
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_lowres/9_2#10_5@PHTrans_3d_lowres_epoch1000_heads4888",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
@@ -771,6 +787,12 @@ def predict_entry_point():
         default="nnUNetPlans",
         help="Plans identifier. Specify the plans in which the desired configuration is located. "
         "Default: nnUNetPlans",
+    )
+    parser.add_argument(
+        "--arc",
+        default="PHTrans",  # undeclared
+        type=str,
+        help="weather to use custom networks",
     )
     parser.add_argument(
         "-tr",
@@ -949,6 +971,7 @@ def predict_entry_point():
                 num_parts=args.num_parts,
                 part_id=args.part_id,
                 device=device,
+                arc=args.arc,
             )
             print(">>> STOP INFER ON {} <<<".format(chk))
             print("sleep for 30s and wait background process to be done")

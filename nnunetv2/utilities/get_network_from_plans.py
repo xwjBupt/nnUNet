@@ -278,7 +278,7 @@ def get_custom_network_from_plans(
                 max_num_features=configuration_manager.unet_max_num_features,
                 depths=[2 for i in range(num_pool - num_only_conv_stage + 1)],
                 num_only_conv_stage=num_only_conv_stage,
-                num_heads=[4, 8, 8, 8],  # len(num_heads) = len(depths)
+                num_heads=[4, 16, 8, 8],  # len(num_heads) = len(depths)
                 window_size=[4, 5, 5],
                 pool_op_kernel_sizes=configuration_manager.pool_op_kernel_sizes,
                 conv_kernel_sizes=configuration_manager.conv_kernel_sizes,

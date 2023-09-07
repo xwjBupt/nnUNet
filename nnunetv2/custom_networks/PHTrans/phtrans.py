@@ -450,14 +450,15 @@ class PHTrans(nn.Module):
             x_skip.append(s)
         out = []
         for inx, layer in enumerate(self.up_layers):
-            if inx > 0:
-                x, ds = layer(x, x_skip[self.num_pool - inx])
-                out.append(ds)
-            else:
-                x, ds = layer(x, None)
-            # if inx > 0:
-            #     out.append(ds)
+            x, ds = layer(x, x_skip[self.num_pool - inx]) if inx > 0 else layer(x, None)
+            out.append(ds)
+
         if self.deep_supervision:
+            # version 1
+            out[-2] = out[-1] + out[-2]
+            del out[-1]
+            # version 2
+            # del out[-2]
             return out[::-1]
         else:
             return out[-1]
@@ -513,4 +514,6 @@ if __name__ == "__main__":
     du = torch.randn([2, 1, 16, 320, 320])
     print(net)
     out = net(du)
-    print(out.shape)
+    for i in out:
+        print(i.shape)
+    # print(out.shape)

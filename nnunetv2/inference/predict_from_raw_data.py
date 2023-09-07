@@ -769,7 +769,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_lowres/9_2#10_5@PHTrans_3d_lowres_epoch1000_heads4888",
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_lowres/9_2#10_35@PHTrans_3d_lowres_epoch1000_heads416168",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )

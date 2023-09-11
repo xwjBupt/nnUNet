@@ -345,13 +345,13 @@ def run_training_entry():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset_name_or_id",
-        default="515",
+        default="516",
         type=str,
         help="Dataset name or ID to train with",
     )
     parser.add_argument(
         "--configuration",
-        default="3d_lowres",
+        default="2d",
         type=str,
         choices=["2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"],
         help="Configuration that should be trained",
@@ -395,7 +395,7 @@ def run_training_entry():
     )
     parser.add_argument(
         "--arc",
-        default="PHTrans",  # undeclared
+        default="undeclared",  # undeclared
         type=str,
         help="weather to use custom networks",
     )

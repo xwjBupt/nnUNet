@@ -761,7 +761,7 @@ def predict_entry_point():
         "-i",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_raw/Dataset515_ICH2023/imagesTs",
+        default="/ai/mnt/code/nnUNet/nnUNet_raw/Dataset516_FPDSA/imagesTs",
         help="input folder. Remember to use the correct channel numberings for your files (_0000 etc). "
         "File endings must be the same as the training dataset!",
     )
@@ -769,7 +769,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset515_ICH2023/nnUNetTrainer__nnUNetPlans__3d_lowres/9_2#10_35@PHTrans_3d_lowres_epoch1000_heads416168",
+        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset516_FPDSA/nnUNetTrainer__nnUNetPlans__2d/9_11#20_4@plainUNet",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
@@ -777,7 +777,7 @@ def predict_entry_point():
         "-d",
         type=str,
         required=False,
-        default="515",
+        default="516",
         help="Dataset with which you would like to predict. You can specify either dataset name or id",
     )
     parser.add_argument(
@@ -790,7 +790,7 @@ def predict_entry_point():
     )
     parser.add_argument(
         "--arc",
-        default="PHTrans",  # undeclared
+        default="undeclared",  # undeclared
         type=str,
         help="weather to use custom networks",
     )
@@ -805,7 +805,7 @@ def predict_entry_point():
         "-c",
         type=str,
         required=False,
-        default="3d_fullres",
+        default="2d",
         help="nnU-Net configuration that should be used for prediction. Config must be located "
         "in the plans specified with -p",
     )
@@ -854,7 +854,7 @@ def predict_entry_point():
         "-chk",
         type=list,
         required=False,
-        default=["checkpoint_best.pth"],
+        default=["checkpoint_final.pth"],
         help="Name of the checkpoint you want to use. Default: [checkpoint_best.pth, checkpoint_final.pth]",
     )
     parser.add_argument(
@@ -974,10 +974,10 @@ def predict_entry_point():
                 arc=args.arc,
             )
             print(">>> STOP INFER ON {} <<<".format(chk))
-            print("sleep for 30s and wait background process to be done")
-            time.sleep(30)
+            print("sleep for 10s and wait background process to be done")
+            time.sleep(10)
             print(
-                "sleep for 30s done, continue going to evaluate {}".format(output_dir)
+                "sleep for 10s done, continue going to evaluate {}".format(output_dir)
             )
             evaluate_folder_entry_point_function(
                 pred_folder=output_dir,

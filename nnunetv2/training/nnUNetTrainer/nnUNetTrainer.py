@@ -118,7 +118,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import cv2
 
 
-def get_edges(targets, erode_kernel_size=3, dilate_kernel_size=3):
+def get_edges(targets, erode_kernel_size=7, dilate_kernel_size=3):
     erode_edges_all = []
     dilate_edges_all = []
     for target in targets:
@@ -1360,8 +1360,8 @@ class nnUNetTrainer(object):
         erode_edges = []
         dilate_edges = []
         # TODO generate erode and dilate
-        # if self.arc == "ERNet":
-        erode_edges, dilate_edges = get_edges(target)
+        if self.arc == "ERNet":
+            erode_edges, dilate_edges = get_edges(target)
         data = data.to(self.device, non_blocking=True)
         if isinstance(target, list):
             target = [i.to(self.device, non_blocking=True) for i in target]

@@ -24,6 +24,7 @@ from nnunetv2.custom_networks.nnformer.nnFormer_seg import nnFormer
 from nnunetv2.custom_networks.UXNet_3D.network_backbone import UXNET
 from nnunetv2.custom_networks.DMFNet import DMFNet
 from nnunetv2.custom_networks.PHTrans.phtrans import PHTrans
+from nnunetv2.custom_networks.ERNet.ERNet import ERNet
 
 
 def get_network_from_plans(
@@ -140,6 +141,7 @@ def get_custom_network_from_plans(
         "UXNET": UXNET,
         "DMFNet": DMFNet,
         "PHTrans": PHTrans,
+        "ERNet": ERNet,
     }
     # kwargs = {
     #     "PlainConvUNet": {
@@ -287,20 +289,37 @@ def get_custom_network_from_plans(
             )
             # model.apply(InitWeights_He(1e-2))
             # some times use the command: rm -rf ~/.nv
+    if segmentation_network_class_name == "ERNet":
+        if pretrain:
+            pass
+        else:
+            model = ERNet(
+                in_ch_seg=input_channels,
+                out_ch_seg=out_classes,
+                deep_supervision=deep_supervision,
+                trans_mode="baseformerV2",
+                depth=1,
+                heads=16,
+                dropout=0.1,
+                mlp_dim=2048,
+            )
+            model.apply(InitWeights_He(1e-2))
     return model
 
 
 if __name__ == "__main__":
-    dummy = torch.rand([2, 1, 16, 320, 320])
-    model = UXNET(
-        in_chans=1,
-        out_chans=2,
-        depths=[2, 2, 2, 2],
-        feat_size=[48, 96, 192, 384],
-        drop_path_rate=0,
-        layer_scale_init_value=1e-6,
-        spatial_dims=3,
+    dummy = torch.rand([2, 3, 256, 256])
+    model = ERNet(
+        in_ch_seg=3,
+        out_ch_seg=2,
+        deep_supervision=True,
+        trans_mode="baseformerV2",
+        depth=1,
+        heads=16,
+        dropout=0.1,
+        mlp_dim=2048,
     )
+    print(model)
     # model = SwinUNETR(
     #     img_size=[16, 320, 320],
     #     in_channels=1,
@@ -309,4 +328,5 @@ if __name__ == "__main__":
     #     use_checkpoint=False,
     # )
     out = model(dummy)
-    print(out.shape)
+    for i in out:
+        print(i.shape)

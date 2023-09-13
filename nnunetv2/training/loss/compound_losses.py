@@ -6,8 +6,15 @@ from torch import nn
 
 
 class DC_and_CE_loss(nn.Module):
-    def __init__(self, soft_dice_kwargs, ce_kwargs, weight_ce=1, weight_dice=1, ignore_label=None,
-                 dice_class=SoftDiceLoss):
+    def __init__(
+        self,
+        soft_dice_kwargs,
+        ce_kwargs,
+        weight_ce=1,
+        weight_dice=1,
+        ignore_label=None,
+        dice_class=SoftDiceLoss,
+    ):
         """
         Weights for CE and Dice do not need to sum to one. You can set whatever you want.
         :param soft_dice_kwargs:
@@ -19,7 +26,7 @@ class DC_and_CE_loss(nn.Module):
         """
         super(DC_and_CE_loss, self).__init__()
         if ignore_label is not None:
-            ce_kwargs['ignore_index'] = ignore_label
+            ce_kwargs["ignore_index"] = ignore_label
 
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
@@ -36,8 +43,10 @@ class DC_and_CE_loss(nn.Module):
         :return:
         """
         if self.ignore_label is not None:
-            assert target.shape[1] == 1, 'ignore label is not implemented for one hot encoded target variables ' \
-                                         '(DC_and_CE_loss)'
+            assert target.shape[1] == 1, (
+                "ignore label is not implemented for one hot encoded target variables "
+                "(DC_and_CE_loss)"
+            )
             mask = (target != self.ignore_label).bool()
             # remove ignore label from target, replace with one of the known labels. It doesn't matter because we
             # ignore gradients in those areas anyway
@@ -48,18 +57,129 @@ class DC_and_CE_loss(nn.Module):
             target_dice = target
             mask = None
 
-        dc_loss = self.dc(net_output, target_dice, loss_mask=mask) \
-            if self.weight_dice != 0 else 0
-        ce_loss = self.ce(net_output, target[:, 0].long()) \
-            if self.weight_ce != 0 and (self.ignore_label is None or num_fg > 0) else 0
+        dc_loss = (
+            self.dc(net_output, target_dice, loss_mask=mask)
+            if self.weight_dice != 0
+            else 0
+        )
+        ce_loss = (
+            self.ce(net_output, target[:, 0].long())
+            if self.weight_ce != 0 and (self.ignore_label is None or num_fg > 0)
+            else 0
+        )
 
         result = self.weight_ce * ce_loss + self.weight_dice * dc_loss
         return result
 
 
+class ERloss(nn.Module):
+    def __init__(
+        self,
+        soft_dice_kwargs,
+        deep_supersion_weights,
+        ce_kwargs,
+        weight_ce=1,
+        weight_dice=1,
+        state="train",
+        ignore_label=None,
+        dice_class=SoftDiceLoss,
+    ):
+        """
+        Weights for CE and Dice do not need to sum to one. You can set whatever you want.
+        :param soft_dice_kwargs:
+        :param ce_kwargs:
+        :param aggregate:
+        :param square_dice:
+        :param weight_ce:
+        :param weight_dice:
+        """
+        super(ERloss, self).__init__()
+        if ignore_label is not None:
+            ce_kwargs["ignore_index"] = ignore_label
+        self.state = state
+        self.weight_dice = weight_dice
+        self.weight_ce = weight_ce
+        self.ignore_label = ignore_label
+        self.deep_supersion_weights = deep_supersion_weights
+        self.loss = DC_and_CE_loss(
+            soft_dice_kwargs,
+            ce_kwargs,
+            weight_ce=weight_ce,
+            weight_dice=weight_dice,
+            ignore_label=ignore_label,
+            dice_class=dice_class,
+        )
+
+    def forward(
+        self,
+        net_output: torch.Tensor,
+        target: torch.Tensor,
+        erode_edges=None,
+        dilate_edges=None,
+        **kwargs,
+    ):
+        """
+        target must be b, c, x, y(, z) with c=1
+        :param net_output:
+        :param target:
+        :return:
+        """
+        LOSS = 0
+        if self.state == "train":
+            segloss = self.loss(net_output[0], target[0])
+            erodeloss = self.loss(net_output[1], erode_edges[0])
+            dilateloss = self.loss(net_output[2], dilate_edges[0])
+            loss = segloss + erodeloss + 2 * dilateloss
+            LOSS = LOSS + loss * self.deep_supersion_weights[0]
+
+            segloss = self.loss(net_output[3], target[2])
+            erodeloss = self.loss(net_output[4], erode_edges[2])
+            dilateloss = self.loss(net_output[5], dilate_edges[2])
+            loss = segloss + erodeloss + 2 * dilateloss
+            LOSS = LOSS + loss * self.deep_supersion_weights[2]
+        else:
+            LOSS = self.loss(net_output[0], target[0])
+        return LOSS
+        # if self.ignore_label is not None:
+        #     assert target.shape[1] == 1, (
+        #         "ignore label is not implemented for one hot encoded target variables "
+        #         "(DC_and_CE_loss)"
+        #     )
+        #     mask = (target != self.ignore_label).bool()
+        #     # remove ignore label from target, replace with one of the known labels. It doesn't matter because we
+        #     # ignore gradients in those areas anyway
+        #     target_dice = torch.clone(target)
+        #     target_dice[target == self.ignore_label] = 0
+        #     num_fg = mask.sum()
+        # else:
+        #     target_dice = target
+        #     mask = None
+
+        # dc_loss = (
+        #     self.dc(net_output, target_dice, loss_mask=mask)
+        #     if self.weight_dice != 0
+        #     else 0
+        # )
+        # ce_loss = (
+        #     self.ce(net_output, target[:, 0].long())
+        #     if self.weight_ce != 0 and (self.ignore_label is None or num_fg > 0)
+        #     else 0
+        # )
+
+        # result = self.weight_ce * ce_loss + self.weight_dice * dc_loss
+        # return result
+
+
 class DC_and_BCE_loss(nn.Module):
-    def __init__(self, bce_kwargs, soft_dice_kwargs, weight_ce=1, weight_dice=1, use_ignore_label: bool = False,
-                 dice_class=MemoryEfficientSoftDiceLoss):
+    def __init__(
+        self,
+        bce_kwargs,
+        soft_dice_kwargs,
+        weight_ce=1,
+        weight_dice=1,
+        use_ignore_label: bool = False,
+        dice_class=MemoryEfficientSoftDiceLoss,
+    ):
         """
         DO NOT APPLY NONLINEARITY IN YOUR NETWORK!
 
@@ -72,7 +192,7 @@ class DC_and_BCE_loss(nn.Module):
         """
         super(DC_and_BCE_loss, self).__init__()
         if use_ignore_label:
-            bce_kwargs['reduction'] = 'none'
+            bce_kwargs["reduction"] = "none"
 
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
@@ -93,7 +213,9 @@ class DC_and_BCE_loss(nn.Module):
 
         dc_loss = self.dc(net_output, target_regions, loss_mask=mask)
         if mask is not None:
-            ce_loss = (self.ce(net_output, target_regions) * mask).sum() / torch.clip(mask.sum(), min=1e-8)
+            ce_loss = (self.ce(net_output, target_regions) * mask).sum() / torch.clip(
+                mask.sum(), min=1e-8
+            )
         else:
             ce_loss = self.ce(net_output, target_regions)
         result = self.weight_ce * ce_loss + self.weight_dice * dc_loss
@@ -101,7 +223,9 @@ class DC_and_BCE_loss(nn.Module):
 
 
 class DC_and_topk_loss(nn.Module):
-    def __init__(self, soft_dice_kwargs, ce_kwargs, weight_ce=1, weight_dice=1, ignore_label=None):
+    def __init__(
+        self, soft_dice_kwargs, ce_kwargs, weight_ce=1, weight_dice=1, ignore_label=None
+    ):
         """
         Weights for CE and Dice do not need to sum to one. You can set whatever you want.
         :param soft_dice_kwargs:
@@ -113,7 +237,7 @@ class DC_and_topk_loss(nn.Module):
         """
         super().__init__()
         if ignore_label is not None:
-            ce_kwargs['ignore_index'] = ignore_label
+            ce_kwargs["ignore_index"] = ignore_label
 
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
@@ -130,8 +254,10 @@ class DC_and_topk_loss(nn.Module):
         :return:
         """
         if self.ignore_label is not None:
-            assert target.shape[1] == 1, 'ignore label is not implemented for one hot encoded target variables ' \
-                                         '(DC_and_CE_loss)'
+            assert target.shape[1] == 1, (
+                "ignore label is not implemented for one hot encoded target variables "
+                "(DC_and_CE_loss)"
+            )
             mask = (target != self.ignore_label).bool()
             # remove ignore label from target, replace with one of the known labels. It doesn't matter because we
             # ignore gradients in those areas anyway
@@ -142,10 +268,16 @@ class DC_and_topk_loss(nn.Module):
             target_dice = target
             mask = None
 
-        dc_loss = self.dc(net_output, target_dice, loss_mask=mask) \
-            if self.weight_dice != 0 else 0
-        ce_loss = self.ce(net_output, target) \
-            if self.weight_ce != 0 and (self.ignore_label is None or num_fg > 0) else 0
+        dc_loss = (
+            self.dc(net_output, target_dice, loss_mask=mask)
+            if self.weight_dice != 0
+            else 0
+        )
+        ce_loss = (
+            self.ce(net_output, target)
+            if self.weight_ce != 0 and (self.ignore_label is None or num_fg > 0)
+            else 0
+        )
 
         result = self.weight_ce * ce_loss + self.weight_dice * dc_loss
         return result

@@ -82,7 +82,11 @@ from nnunetv2.training.dataloading.data_loader_3d import nnUNetDataLoader3D
 from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDataset
 from nnunetv2.training.dataloading.utils import get_case_identifiers, unpack_dataset
 from nnunetv2.training.logging.nnunet_logger import nnUNetLogger
-from nnunetv2.training.loss.compound_losses import DC_and_CE_loss, DC_and_BCE_loss
+from nnunetv2.training.loss.compound_losses import (
+    DC_and_CE_loss,
+    DC_and_BCE_loss,
+    ERloss,
+)
 from nnunetv2.training.loss.deep_supervision import DeepSupervisionWrapper
 from nnunetv2.training.loss.dice import get_tp_fp_fn_tn, MemoryEfficientSoftDiceLoss
 from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
@@ -111,6 +115,44 @@ from torch import distributed as dist
 from torch.cuda import device_count
 from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
+import cv2
+
+
+def get_edges(targets, erode_kernel_size=3, dilate_kernel_size=3):
+    erode_edges_all = []
+    dilate_edges_all = []
+    for target in targets:
+        erode_edges = []
+        dilate_edges = []
+        assert target.max() in [0, 1]
+        assert target.min() in [0, 1]
+        for b in range(target.shape[0]):
+            target_single = target[b][0].numpy().astype(np.uint8)
+            erode_kernel = np.ones((erode_kernel_size, erode_kernel_size), np.uint8)
+            erode = cv2.erode(target_single, erode_kernel, iterations=1)
+            erode_edge = abs(target_single - erode)
+            erode_edge = np.where(erode_edge >= 1, 1, 0)
+            assert erode_edge.max() in [0, 1]
+            assert erode_edge.min() in [0, 1]
+            erode_edges.append(
+                torch.tensor(
+                    erode_edge[np.newaxis, np.newaxis, ...], dtype=target.dtype
+                )
+            )
+            dialte_kernel = np.ones((dilate_kernel_size, dilate_kernel_size), np.uint8)
+            dilate = cv2.dilate(target_single, dialte_kernel, iterations=1)
+            dilate_edge = abs(target_single - dilate)
+            dilate_edge = np.where(dilate_edge >= 1, 1, 0)
+            assert dilate_edge.max() in [0, 1]
+            assert dilate_edge.min() in [0, 1]
+            dilate_edges.append(
+                torch.tensor(
+                    dilate_edge[np.newaxis, np.newaxis, ...], dtype=target.dtype
+                )
+            )
+        erode_edges_all.append(torch.cat(erode_edges, dim=0))
+        dilate_edges_all.append(torch.cat(dilate_edges, dim=0))
+    return erode_edges_all, dilate_edges_all
 
 
 class nnUNetTrainer(object):
@@ -535,6 +577,13 @@ class nnUNetTrainer(object):
             self.oversample_foreground_percent = oversample_percents[my_rank]
 
     def _build_loss(self):
+        deep_supervision_scales = self._get_deep_supervision_scales()
+        # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
+        # this gives higher resolution outputs more weight in the loss
+        weights = np.array([1 / (2**i) for i in range(len(deep_supervision_scales))])
+
+        # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
+        weights = weights / weights.sum()
         if self.label_manager.has_regions:
             loss = DC_and_BCE_loss(
                 {},
@@ -548,30 +597,39 @@ class nnUNetTrainer(object):
                 dice_class=MemoryEfficientSoftDiceLoss,
             )
         else:
-            loss = DC_and_CE_loss(
-                {
-                    "batch_dice": self.configuration_manager.batch_dice,
-                    "smooth": 1e-5,
-                    "do_bg": False,
-                    "ddp": self.is_ddp,
-                },
-                {},
-                weight_ce=1,
-                weight_dice=1,
-                ignore_label=self.label_manager.ignore_label,
-                dice_class=MemoryEfficientSoftDiceLoss,
-            )
+            if self.arc == "ERNet":
+                loss = ERloss(
+                    soft_dice_kwargs={
+                        "batch_dice": self.configuration_manager.batch_dice,
+                        "smooth": 1e-5,
+                        "do_bg": False,
+                        "ddp": self.is_ddp,
+                    },
+                    deep_supersion_weights=weights,
+                    ce_kwargs={},
+                    weight_ce=1,
+                    weight_dice=1.2,
+                    ignore_label=self.label_manager.ignore_label,
+                    dice_class=MemoryEfficientSoftDiceLoss,
+                )
+            else:
+                loss = DC_and_CE_loss(
+                    {
+                        "batch_dice": self.configuration_manager.batch_dice,
+                        "smooth": 1e-5,
+                        "do_bg": False,
+                        "ddp": self.is_ddp,
+                    },
+                    {},
+                    weight_ce=1,
+                    weight_dice=1,
+                    ignore_label=self.label_manager.ignore_label,
+                    dice_class=MemoryEfficientSoftDiceLoss,
+                )
 
-        deep_supervision_scales = self._get_deep_supervision_scales()
-
-        # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
-        # this gives higher resolution outputs more weight in the loss
-        weights = np.array([1 / (2**i) for i in range(len(deep_supervision_scales))])
-
-        # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
-        weights = weights / weights.sum()
         # now wrap the loss
-        loss = DeepSupervisionWrapper(loss, weights)
+        if self.arc != "ERNet":
+            loss = DeepSupervisionWrapper(loss, weights)
         return loss
 
     def configure_rotation_dummyDA_mirroring_and_inital_patch_size(self):
@@ -1299,10 +1357,21 @@ class nnUNetTrainer(object):
     def train_step(self, batch: dict) -> dict:
         data = batch["data"]
         target = batch["target"]
-
+        erode_edges = []
+        dilate_edges = []
+        # TODO generate erode and dilate
+        # if self.arc == "ERNet":
+        erode_edges, dilate_edges = get_edges(target)
         data = data.to(self.device, non_blocking=True)
         if isinstance(target, list):
             target = [i.to(self.device, non_blocking=True) for i in target]
+            if len(erode_edges) > 0:
+                erode_edges = [
+                    i.to(self.device, non_blocking=True) for i in erode_edges
+                ]
+                dilate_edges = [
+                    i.to(self.device, non_blocking=True) for i in dilate_edges
+                ]
         else:
             target = target.to(self.device, non_blocking=True)
 
@@ -1316,7 +1385,11 @@ class nnUNetTrainer(object):
         ) if self.device.type == "cuda" else dummy_context():
             output = self.network(data)
             # del data
-            l = self.loss(output, target)
+            if self.arc == "ERNet":
+                self.loss.state = "train"
+                l = self.loss(output, target, erode_edges, dilate_edges)
+            else:
+                l = self.loss(output, target)
 
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
@@ -1364,6 +1437,8 @@ class nnUNetTrainer(object):
         ) if self.device.type == "cuda" else dummy_context():
             output = self.network(data)
             del data
+            if self.arc == "ERNet":
+                self.loss.state = "val"
             l = self.loss(output, target)
 
         # we only need the output with the highest output resolution

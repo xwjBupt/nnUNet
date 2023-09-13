@@ -761,7 +761,7 @@ def predict_entry_point():
         "-i",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_raw/Dataset516_FPDSA/imagesTs",
+        default="/home/xwj/WORK/code/nnUNet/nnUNet_raw/Dataset516_FPDSA/imagesTs",
         help="input folder. Remember to use the correct channel numberings for your files (_0000 etc). "
         "File endings must be the same as the training dataset!",
     )
@@ -769,7 +769,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/ai/mnt/code/nnUNet/nnUNet_results/Dataset516_FPDSA/nnUNetTrainer__nnUNetPlans__2d/9_11#20_4@plainUNet",
+        default="/home/xwj/WORK/code/nnUNet/nnUNet_results/Dataset516_FPDSA/nnUNetTrainer__nnUNetPlans__2d/DEBUG/DEBUG",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
@@ -790,7 +790,7 @@ def predict_entry_point():
     )
     parser.add_argument(
         "--arc",
-        default="undeclared",  # undeclared
+        default="ERNet",  # undeclared
         type=str,
         help="weather to use custom networks",
     )

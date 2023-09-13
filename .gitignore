@@ -120,3 +120,5 @@ wandb/*
 nnUNet_results/*
 nnUNet_raw/*
 nnUNet_preprocessed/*
+nnUNet_preprocessed
+nnUNet_raw

@@ -769,7 +769,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/home/xwj/WORK/code/nnUNet/nnUNet_results/Dataset516_FPDSA/nnUNetTrainer__nnUNetPlans__2d/DEBUG/DEBUG",
+        default="/home/xwj/WORK/code/nnUNet/nnUNet_results/Dataset516_FPDSA/nnUNetTrainer__nnUNetPlans__2d/9_13#11_17@ERNet_E5_D3-D1",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
@@ -854,7 +854,7 @@ def predict_entry_point():
         "-chk",
         type=list,
         required=False,
-        default=["checkpoint_final.pth"],
+        default=["checkpoint_best.pth", "checkpoint_final.pth"],
         help="Name of the checkpoint you want to use. Default: [checkpoint_best.pth, checkpoint_final.pth]",
     )
     parser.add_argument(

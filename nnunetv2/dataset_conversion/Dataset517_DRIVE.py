@@ -3,13 +3,12 @@ import shutil
 from multiprocessing import Pool
 import numpy as np
 from batchgenerators.utilities.file_and_folder_operations import *
-
+import os
 from nnunetv2.dataset_conversion.generate_dataset_json import generate_dataset_json
 from nnunetv2.paths import nnUNet_raw
 from skimage import io
 from acvl_utils.morphology.morphology_helper import generic_filter_components
 from scipy.ndimage import binary_fill_holes
-import os
 
 
 def load_and_covnert_case(
@@ -37,15 +36,17 @@ def load_and_covnert_case(
     # io.imsave(output_seg, seg, check_contrast=False)
     seg = io.imread(input_seg)
     seg = np.where(seg == 255, 1, 0).astype(np.uint8)
+    img = io.imread(input_image)
     if list(np.unique(seg)) != [0, 1]:
         print(input_seg, np.unique(seg))
     io.imsave(output_seg, seg, check_contrast=False)
-    shutil.copy(input_image, output_image)
+    io.imsave(output_image, img, check_contrast=False)
+    # shutil.copy(input_image, output_image)
 
 
 if __name__ == "__main__":
-    source = "/ai/mnt/data/FPDSA-Split/REMOVE-venous"
-    dataset_name = "Dataset516_FPDSA"
+    source = "/home/xwj/WORK/raw/DRIVE/Raw"
+    dataset_name = "Dataset517_DRIVE"
 
     imagestr = join(nnUNet_raw, dataset_name, "imagesTr")
     imagests = join(nnUNet_raw, dataset_name, "imagesTs")
@@ -57,11 +58,11 @@ if __name__ == "__main__":
     maybe_mkdir_p(labelsts)
 
     train_source = join(source, "train")
-    test_source = join(source, "val")
+    test_source = join(source, "test")
 
     with multiprocessing.get_context("spawn").Pool(8) as p:
         # not all training images have a segmentation
-        valid_ids = subfiles(join(train_source), join=False, suffix="jpg")
+        valid_ids = subfiles(join(train_source, "images"), join=False, suffix=".tif")
         num_train = len(valid_ids)
         r = []
         for v in valid_ids:
@@ -70,27 +71,37 @@ if __name__ == "__main__":
                     load_and_covnert_case,
                     (
                         (
-                            join(train_source, v),
-                            join(train_source, v[:-4] + ".png"),
-                            join(imagestr, v[:-4] + "_0000.png"),
-                            join(labelstr, v[:-4] + ".png"),
+                            join(train_source, "images", v),
+                            join(
+                                train_source,
+                                "gt",
+                                v.replace("_training", "_manual1").replace(
+                                    ".tif", ".gif"
+                                ),
+                            ),
+                            join(imagestr, v.split("_")[0] + "_0000.png"),
+                            join(labelstr, v.split("_")[0] + ".png"),
                         ),
                     ),
                 )
             )
 
         # test set
-        valid_ids = subfiles(join(test_source), join=False, suffix="jpg")
+        valid_ids = subfiles(join(test_source, "images"), join=False, suffix=".tif")
         for v in valid_ids:
             r.append(
                 p.starmap_async(
                     load_and_covnert_case,
                     (
                         (
-                            join(test_source, v),
-                            join(test_source, v[:-4] + ".png"),
-                            join(imagests, v[:-4] + "_0000.png"),
-                            join(labelsts, v[:-4] + ".png"),
+                            join(test_source, "images", v),
+                            join(
+                                test_source,
+                                "gt",
+                                v.replace("_test", "_manual1").replace(".tif", ".gif"),
+                            ),
+                            join(imagests, v.split("_")[0] + "_0000.png"),
+                            join(labelsts, v.split("_")[0] + ".png"),
                         ),
                     ),
                 )
@@ -106,4 +117,4 @@ if __name__ == "__main__":
         dataset_name=dataset_name,
     )
     print("DONE")
-    os.system("nnUNetv2_plan_and_preprocess -d 516 --verify_dataset_integrity")
+    os.system("nnUNetv2_plan_and_preprocess -d 517 --verify_dataset_integrity")

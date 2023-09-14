@@ -115,7 +115,7 @@ class Transformer(nn.Module):
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.0, **kwargs):
         super().__init__()
         self.layers = nn.ModuleList([])
-        for _ in range(depth):
+        for i in range(depth):
             self.layers.append(
                 nn.ModuleList(
                     [

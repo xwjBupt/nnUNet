@@ -798,10 +798,10 @@ class Transfer(nn.Module):
                 ch=ch,
                 dim=in_dim,
                 patch_dim=patch_dim,
-                # depth=1,
-                # heads=16,
-                # mlp_dim=2048,
-                # dropout=0.1,
+                depth=2,
+                heads=16,
+                mlp_dim=2048,
+                dropout=0.1,
                 **kwargs
             )
             self.erode_trans = nn.Sequential(

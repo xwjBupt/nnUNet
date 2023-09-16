@@ -761,7 +761,7 @@ def predict_entry_point():
         "-i",
         type=str,
         required=False,
-        default="/home/xwj/WORK/code/nnUNet/nnUNet_raw/Dataset516_FPDSA/imagesTs",
+        default="/home/xwj/WORK/code/nnUNet/nnUNet_raw/Dataset517_DRIVE/imagesTs",
         help="input folder. Remember to use the correct channel numberings for your files (_0000 etc). "
         "File endings must be the same as the training dataset!",
     )
@@ -769,7 +769,7 @@ def predict_entry_point():
         "-o",
         type=str,
         required=False,
-        default="/home/xwj/WORK/code/nnUNet/nnUNet_results/Dataset516_FPDSA/nnUNetTrainer__nnUNetPlans__2d/9_14#15_22@ERNet_E5_D3-D2",
+        default="/home/xwj/WORK/code/nnUNet/nnUNet_results/Dataset517_DRIVE/nnUNetTrainer__nnUNetPlans__2d/9_16#0_15@ERNet_E7_D5-D1",
         help="Output folder. If it does not exist it will be created. Predicted segmentations will "
         "have the same name as their source images.",
     )
@@ -777,7 +777,7 @@ def predict_entry_point():
         "-d",
         type=str,
         required=False,
-        default="516",
+        default="517",
         help="Dataset with which you would like to predict. You can specify either dataset name or id",
     )
     parser.add_argument(
@@ -841,7 +841,7 @@ def predict_entry_point():
     )
     parser.add_argument(
         "--save_probabilities",
-        action="store_true",
+        default=True,
         help='Set this to export predicted class "probabilities". Required if you want to ensemble '
         "multiple configurations.",
     )

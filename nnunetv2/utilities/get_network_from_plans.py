@@ -298,7 +298,7 @@ def get_custom_network_from_plans(
                 out_ch_seg=out_classes,
                 deep_supervision=deep_supervision,
                 trans_mode="baseformerV2",
-                depth=1,
+                depth=2,
                 heads=16,
                 dropout=0.1,
                 mlp_dim=2048,

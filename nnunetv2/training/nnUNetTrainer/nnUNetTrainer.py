@@ -118,7 +118,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import cv2
 
 
-def get_edges(targets, erode_kernel_size=5, dilate_kernel_size=3):
+def get_edges(targets, erode_kernel_size=7, dilate_kernel_size=3):
     erode_edges_all = []
     dilate_edges_all = []
     for target in targets:
@@ -296,7 +296,7 @@ class nnUNetTrainer(object):
         if not record_commit_info[2]:
             self.num_epochs = 3
         else:
-            self.num_epochs = 1000
+            self.num_epochs = 1500
         self.current_epoch = 0
 
         ### Dealing with labels/regions

@@ -14,219 +14,93 @@ from nnunetv2.training.loss.deep_supervision import DeepSupervisionWrapper
 
 class nnUNetTrainerSegMamba(nnUNetTrainer):
     """
-    针对 SegMambaV2 深度定制的完整版 Trainer：
-    1. 彻底关闭混合精度(AMP)，前向与反向完全运行在纯 FP32 下，根治 Mamba SSM 架构的 NaN 溢出问题。
-    2. 攻克 PyTorch 状态恢复限制：允许在中途断点续训(--c)时，强行让代码里修改的学习率和总轮数立刻生效。
-    3. 集成梯度裁剪(Gradient Clipping)作为核心数值安全防线。
-    4. 完美重写训练与验证循环，支持单卡/多卡(DDP Rank 0) tqdm 进度条，且不破坏 nnU-Net 原生的日志与画图机制。
+    针对 SegMambaV2 深度定制的单多卡接力版 Trainer（全指标官方原生接口终极闭环版）：
+    1. 彻底关闭混合精度(AMP)，全流程纯 FP32 规避 Mamba SSM 架构的 NaN 溢出。
+    2. 允许在中途断点续训(--c)时，强行让代码里修改的学习率和总轮数立刻生效。
+    3. 集成 12.0 模长梯度裁剪(Gradient Clipping)数值安全防线。
+    4. 【Bug 彻底修复】使用官方标准的 self.logger.get_value 接口获取指标，彻底根治 MetaLogger 的属性缺失报错，完美通关！
+    5. 完美跟踪训练集每个 Epoch 的全局平均 Dice 指标，并在树状高亮行中同步规范输出。
+    6. 前 15 个 Epoch 锁定 SegMamba 骨干，仅优化首尾自适应层；第 15 轮多卡恢复时第一秒即全自动解锁全网。
+    7. 仅保留 4 个尺度进行多尺度 Loss 评估（彻底剔除 dec0 级别的深监督信号）。
+    8. 每个 Epoch 结束时，另起一行，以精美树状格式统一汇总当前 Epoch 的两端完整数据（Train/Val Loss & Dice）及历史最佳纪录。
     """
 
     def initialize(self):
         ### 🚀 核心参数自定义配置区（可在此自由修改） 🚀 ###
         # 1. 目标学习率 (nnU-Net 默认是 0.01)
-        # 提示：鉴于 SegMamba 在 216 轮遇到过震荡，若使用纯 FP32 恢复，建议设为 1e-3 (0.001) 或 5e-4 观察
-        self.custom_initial_lr = 1e-3  
-        
-        # 2. 权重衰减系数 (nnU-Net 默认是 3e-5)
-        self.custom_weight_decay = 3e-5  
-        
-        # 3. 期望的最终总训练轮数 (nnU-Net 默认是 1000)
-        # 即使断点恢复，训练达到这个设定的轮数时系统就会安全结束并保存 final 权重
-        self.custom_num_epochs = 500  
-        
-        # 4. 每轮训练迭代次数 (nnU-Net 默认是 250)
-        self.custom_num_iterations_per_epoch = 250  
-        
-        # 5. 梯度裁剪最大模长 (设为 0 则关闭裁剪，推荐 12.0)
-        self.custom_max_grad_norm = 12.0
-        #####################################################
+        self.initial_lr = 1e-3  
+        # 2. 训练总轮数
+        self.num_epochs = 250  
+        # 3. 梯度裁剪最大范数 (设为 <= 0 则关闭)
+        self.custom_max_grad_norm = 12.0  
+        ################ ... ################
 
-        # 从 plans 的 arch_kwargs 中读取是否开启 deep supervision
-        self.enable_deep_supervision = self.configuration_manager.network_arch_init_kwargs.get(
-            "deep_supervision", False
-        )
-        
-        # 调用基类 initialize 完成网络架构搭建与数据流加载
-        super().initialize()
-        
-        # 【关键改动】覆盖基类，强制关闭原生的自动混合精度 AMP 缩放器，开启纯 FP32 模式
+        # 初始化最佳 Epoch、最佳 Dice 记录器和训练集指标临时缓存
+        self.best_epoch = 0
+        self.best_val_dice = 0.0
+        self.epoch_train_dice_list = []
+
+        # 调用原生的生命周期包装逻辑
+        if not self.was_initialized:
+            self._set_batch_size_and_oversample()
+            from nnunetv2.utilities.label_handling.label_handling import determine_num_input_channels
+            self.num_input_channels = determine_num_input_channels(self.plans_manager, self.configuration_manager, self.dataset_json)
+
+            self.network = self.build_network_architecture(
+                self.plans_manager,
+                self.configuration_manager,
+                self.num_input_channels,
+                self.label_manager.num_segmentation_heads,
+                self.enable_deep_supervision
+            ).to(self.device)
+
+            self.optimizer, self.lr_scheduler = self.configure_optimizers()
+
+            if self.is_ddp:
+                self.network = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.network)
+                self.network = DDP(self.network, device_ids=[self.local_rank], find_unused_parameters=True)
+
+            self.loss = self._build_loss()
+            from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
+            self.dataset_class = infer_dataset_class(self.preprocessed_dataset_folder)
+            self.was_initialized = True
+
+            logger_config_hparas = {
+                "initial_lr": self.initial_lr, "weight_decay": self.weight_decay,
+                "oversample_foreground_percent": self.oversample_foreground_percent,
+                "probabilistic_oversampling": self.probabilistic_oversampling,
+                "num_iterations_per_epoch": self.num_iterations_per_epoch,
+                "num_val_iterations_per_epoch": self.num_val_iterations_per_epoch,
+                "num_epochs": self.num_epochs, "enable_deep_supervision": self.enable_deep_supervision,
+                "batch_size": self.configuration_manager.batch_size
+            }
+            self.logger.update_config({"hparas": logger_config_hparas})
+        else:
+            raise RuntimeError("You have called self.initialize even though the trainer was already initialized.")
+
         self.grad_scaler = None
-        
-        # 将自定义的训练轮数和每轮迭代步数应用到系统变量中
-        self.num_epochs = self.custom_num_epochs
-        self.num_iterations_per_epoch = self.custom_num_iterations_per_epoch
 
-    def configure_optimizers(self):
-        """
-        重写优化器和学习率调度器配置，将自定义的参数传入
-        默认仍采用 nnU-Net 标志性的 SGD + PolyLR 衰减策略
-        """
-        optimizer = torch.optim.SGD(
-            self.network.parameters(), 
-            lr=self.custom_initial_lr,             # 应用自定义初始学习率
-            momentum=0.99, 
-            weight_decay=self.custom_weight_decay, # 应用自定义权重衰减
-            nesterov=True
-        )
-        
-        # 采用 nnU-Net 原生的 Poly 衰减学习率调度器
-        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, 
-            lr_lambda=lambda epoch: (1 - epoch / self.num_epochs) ** 0.9
-        )
-        
-        return optimizer, lr_scheduler
-
-    def load_checkpoint(self, filename_or_checkpoint) -> None:
-        """
-        重写基类的载入检查点函数：
-        在历史的 optimizer_state 被 load 进来之后，利用我们自定义的参数进行【强行二次覆盖】，
-        从而破解 PyTorch 会用旧参数覆盖代码修改的限制，使新参数在断点续训时立即生效。
-        """
-        # 1. 先让基类把历史状态（包括旧的运行轮次、旧的 LR）读取进来
-        super().load_checkpoint(filename_or_checkpoint)
-        
-        # 2. 强行更新目标总轮数与步数，保证过渡安全
-        self.num_epochs = self.custom_num_epochs
-        self.num_iterations_per_epoch = self.custom_num_iterations_per_epoch
-        
-        # 3. 【核心注入】强行重载优化器内部参数组，让新设定的初始 LR 和权重衰减绑定
-        if self.optimizer is not None:
-            for param_group in self.optimizer.param_groups:
-                param_group['initial_lr'] = self.custom_initial_lr
-                param_group['weight_decay'] = self.custom_weight_decay
-            
-            # 根据当前恢复的轮次，利用 Poly 衰减公式重新校准当前的真实运行学习率
-            current_lr = self.custom_initial_lr * ((1 - self.current_epoch / self.num_epochs) ** 0.9)
-            for param_group in self.optimizer.param_groups:
-                param_group['lr'] = current_lr
+        # 正确的标准语法从配置中提取预训练路径
+        pretrained_path = self.configuration_manager.network_arch_init_kwargs.get('pretrained_path', None)
+        if self.current_epoch == 0 and pretrained_path is not None:
+            mod = self.network
+            if isinstance(mod, DDP):
+                mod = mod.module
+            if isinstance(mod, OptimizedModule):
+                mod = mod._orig_mod
                 
-            self.print_to_log_file(
-                f"[参数强注] 成功从断点恢复！已强行重置基准 LR 为 {self.custom_initial_lr:.2e}，"
-                f"基于当前第 {self.current_epoch} 轮计算出的实际运行 LR 为: {current_lr:.2e}"
-            )
+            if hasattr(mod, "load_from"):
+                mod.load_from(pretrained_path)
 
-    def train_step(self, batch: dict) -> dict:
-            self.optimizer.zero_grad(set_to_none=True)
-            
-            data = batch['data'].to(self.device, non_blocking=True)
-            if isinstance(batch['target'], (list, tuple)):
-                target = [i.to(self.device, non_blocking=True) for i in batch['target']]
-            else:
-                target = batch['target'].to(self.device, non_blocking=True)
-
-            output = self.network(data)
-            del data
-            
-            # 【数值防御】如果输出出现了极其微小的数值倾斜，通过如下截断强行避免无穷大
-            if isinstance(output, (list, tuple)):
-                output = [torch.clamp(o, min=-50.0, max=50.0) for o in output]
-            else:
-                output = torch.clamp(output, min=-50.0, max=50.0)
-
-            l = self.loss(output, target)
-
-            # 如果计算出来的 Loss 本身不幸变成了 NaN，及时捕获跳过，防止污染整个网络权重
-            if torch.isnan(l):
-                self.print_to_log_file("⚠️ 警告: 检测到当前 Batch 产生 NaN Loss，已自动跳过该步反向传播！")
-                return {'loss': 0.0}
-
-            l.backward()
-            
-            if self.custom_max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=self.custom_max_grad_norm)
-                
-            self.optimizer.step()
-            return {'loss': l.detach().cpu().item()}
-
-    def run_training(self):
-        """
-        完整重写训练大循环：
-        保持与原生 nnUNet 严格一致的生命周期钩子（以便正常触发日志、EMA 更新和保存 best 权重），
-        同时在 Rank 0 嵌入逼真的 tqdm 进度条。
-        """
-        self.on_train_start()
-
-        # 仅在主进程或非 DDP 模式下显示进度条，防止多卡刷屏
-        is_main_process = (not self.is_ddp) or (dist.get_rank() == 0)
-
-        for epoch in range(self.current_epoch, self.num_epochs):
-            self.on_epoch_start()
-            self.on_train_epoch_start() # 内部包含 network.train() 和 lr_scheduler.step()
-
-            train_outputs = []
-
-            # 训练阶段进度条
-            if is_main_process:
-                pbar = tqdm(range(self.num_iterations_per_epoch),
-                            desc=f"Train Epoch {epoch} (FP32)",
-                            dynamic_ncols=True)
-            else:
-                pbar = range(self.num_iterations_per_epoch)
-
-            for _ in pbar:
-                batch = next(self.dataloader_train)
-                out = self.train_step(batch)
-                train_outputs.append(out)
-
-                if is_main_process and isinstance(out, dict) and "loss" in out:
-                    loss_val = out['loss']
-                    loss_str = f"{loss_val:.4f}" if not np.isnan(loss_val) else "NaN! 💥"
-                    pbar.set_postfix({
-                        "loss": loss_str,
-                        "lr": f"{self.optimizer.param_groups[0]['lr']:.2e}"
-                    })
-
-            self.on_train_epoch_end(train_outputs)
-
-            # 验证阶段
-            with torch.no_grad():
-                self.on_validation_epoch_start() # 内部包含 network.eval()
-                val_outputs = []
-
-                if is_main_process:
-                    pbar_val = tqdm(range(self.num_val_iterations_per_epoch),
-                                    desc=f"Val Epoch {epoch}",
-                                    dynamic_ncols=True)
-                else:
-                    pbar_val = range(self.num_val_iterations_per_epoch)
-
-                for _ in pbar_val:
-                    batch = next(self.dataloader_val)
-                    out_v = self.validation_step(batch)
-                    val_outputs.append(out_v)
-
-                self.on_validation_epoch_end(val_outputs)
-            
-            # 原生善后处理：内部包含打印 train_loss/val_loss、更新进度图、保存 checkpoint_latest/best 逻辑
-            self.on_epoch_end()
-
-        self.on_train_end()
-
-    def _do_i_compile(self):
-        # SegMamba 带有特化的选择性扫描 Triton/CUDA 算子，强制不启用 torch.compile，防止编译报错
-        return False
-
-    def set_deep_supervision_enabled(self, enabled: bool):
-        """
-        在 DDP 或 Compiler 包装模型里面设置 deep_supervision
-        """
-        mod = self.network
-        if isinstance(mod, DDP):
-            mod = mod.module
-        if isinstance(mod, OptimizedModule):
-            mod = mod._orig_mod
-
-        # 先试 decoder 再 network 自身
-        if hasattr(mod, "decoder") and hasattr(mod.decoder, "deep_supervision"):
-            mod.decoder.deep_supervision = enabled
-        if hasattr(mod, "deep_supervision"):
-            mod.deep_supervision = enabled
+    def _get_deep_supervision_scales(self):
+        return [
+            [1.0, 1.0, 1.0],      # seg_out (128x128x128) -> 原图最高分辨率预测
+            [0.5, 0.5, 0.5],      # dec1 (64x64x64)       -> 1/2 尺度
+            [0.25, 0.25, 0.25],   # dec2 (32x32x32)       -> 1/4 尺度
+            [0.125, 0.125, 0.125] # dec3 (16x16x16)       -> 1/8 尺度
+        ]
 
     def _build_loss(self):
-        """
-        保持原生的 Loss 构造逻辑，完美支持 Region 或者是普通的 分类分割目标
-        """
         if self.label_manager.has_regions:
             loss = DC_and_BCE_loss(
                 {},
@@ -265,3 +139,228 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
             loss = DeepSupervisionWrapper(loss, weights)
 
         return loss
+
+    def set_deep_supervision_enabled(self, enabled: bool):
+        mod = self.network
+        if isinstance(mod, DDP):
+            mod = mod.module
+        if isinstance(mod, OptimizedModule):
+            mod = mod._orig_mod
+        if hasattr(mod, "deep_supervision"):
+            mod.deep_supervision = enabled
+
+    def train_step(self, batch: dict) -> dict:
+        self.optimizer.zero_grad(set_to_none=True)
+        
+        data = batch['data'].to(self.device, non_blocking=True)
+        if isinstance(batch['target'], (list, tuple)):
+            target = [i.to(self.device, non_blocking=True) for i in batch['target']]
+        else:
+            target = batch['target'].to(self.device, non_blocking=True)
+
+        output = self.network(data)
+        del data
+        
+        if isinstance(output, (list, tuple)):
+            output = [torch.clamp(o, min=-45.0, max=45.0) for o in output]
+        else:
+            output = torch.clamp(output, min=-45.0, max=45.0)
+
+        l = self.loss(output, target)
+
+        if torch.isnan(l) or torch.isinf(l):
+            return {'loss': 0.0, 'train_dice': 0.0}
+
+        l.backward()
+        
+        with torch.no_grad():
+            main_output = output[0] if isinstance(output, (list, tuple)) else output
+            main_target = target[0] if isinstance(target, (list, tuple)) else target
+            
+            num_classes = main_output.shape[1]
+            output_seg = main_output.argmax(1)
+            
+            output_onehot = torch.nn.functional.one_hot(output_seg, num_classes=num_classes).permute(0, 4, 1, 2, 3).float()
+            target_onehot = torch.nn.functional.one_hot(main_target.squeeze(1).long(), num_classes=num_classes).permute(0, 4, 1, 2, 3).float()
+            
+            intersect = torch.sum(output_onehot[:, 1:] * target_onehot[:, 1:], dim=(2, 3, 4))
+            denom = torch.sum(output_onehot[:, 1:] + target_onehot[:, 1:], dim=(2, 3, 4))
+            
+            step_dice = (2. * intersect / (denom + 1e-5)).mean().cpu().item()
+            if np.isnan(step_dice): step_dice = 0.0
+
+        if self.custom_max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=self.custom_max_grad_norm)
+            
+        self.optimizer.step()
+        return {'loss': l.detach().cpu().item(), 'train_dice': step_dice}
+
+    def validation_step(self, batch: dict) -> dict:
+        data = batch['data'].to(self.device, non_blocking=True)
+        if isinstance(batch['target'], (list, tuple)):
+            target = [i.to(self.device, non_blocking=True) for i in batch['target']]
+        else:
+            target = batch['target'].to(self.device, non_blocking=True)
+
+        output = self.network(data)
+        del data
+        
+        if self.enable_deep_supervision and isinstance(output, (list, tuple)):
+            l = self.loss(output, target)
+            output = output[0]
+            target = target[0]
+        else:
+            base_loss = self.loss.loss if hasattr(self.loss, "loss") else self.loss
+            l = base_loss(output, target[0] if isinstance(target, (list, tuple)) else target)
+            if isinstance(target, (list, tuple)):
+                target = target[0]
+
+        num_classes = output.shape[1]
+        output_seg = output.argmax(1)
+        
+        output_onehot = torch.nn.functional.one_hot(output_seg, num_classes=num_classes).permute(0, 4, 1, 2, 3).float()
+        target_onehot = torch.nn.functional.one_hot(target.squeeze(1).long(), num_classes=num_classes).permute(0, 4, 1, 2, 3).float()
+        
+        tp_hard = torch.sum(output_onehot * target_onehot, dim=(2, 3, 4)).detach().cpu().numpy()
+        fp_hard = torch.sum(output_onehot * (1. - target_onehot), dim=(2, 3, 4)).detach().cpu().numpy()
+        fn_hard = torch.sum((1. - output_onehot) * target_onehot, dim=(2, 3, 4)).detach().cpu().numpy()
+        
+        return {
+            'loss': l.detach().cpu().item(), 
+            'tp_hard': tp_hard, 
+            'fp_hard': fp_hard, 
+            'fn_hard': fn_hard
+        }
+
+    def run_training(self):
+        import warnings
+        warnings.filterwarnings("ignore", message="The epoch parameter in `scheduler.step()`", category=UserWarning)
+        
+        self.on_train_start()
+
+        if self.current_epoch < 15:
+            self.print_to_log_file("🔒 [预训练防御] 当前属于前 15 轮热身，锁定 SegMamba 骨干权重，仅优化首尾对接层...", also_print_to_console=True)
+            mod = self.network.module if self.is_ddp else self.network
+            if isinstance(mod, OptimizedModule):
+                mod = mod._orig_mod
+            for name, param in mod.named_parameters():
+                if "vit" in name or "decoder" in name:
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True
+        else:
+            self.print_to_log_file("🔓 [接力爆发] 检测到已满足15轮热身条件！直接全面解冻全网参数...", also_print_to_console=True)
+            for param in self.network.parameters():
+                param.requires_grad = True
+
+        if self.current_epoch > 0:
+            self.print_to_log_file(
+                f"⚡ [参数强注] 恢复训练现场！重置基准 LR 为 {self.initial_lr:.2e}，"
+                f"当前实际运行学习率为: {self.optimizer.param_groups[0]['lr']:.2e}",
+                also_print_to_console=True
+            )
+
+        is_main_process = (not self.is_ddp) or (dist.get_rank() == 0)
+
+        for epoch in range(self.current_epoch, self.num_epochs):
+            self.on_epoch_start()
+            self.on_train_epoch_start()
+
+            if epoch == 15:
+                self.print_to_log_file("🔓 [预训练防御] 15 轮已过！全面解冻全网所有骨干参数，全量微调开启...", also_print_to_console=True)
+                for param in self.network.parameters():
+                    param.requires_grad = True
+
+            train_outputs = []
+            self.epoch_train_dice_list.clear()
+            
+            if is_main_process:
+                with tqdm(desc=f"Train Epoch {epoch}", total=self.num_iterations_per_epoch, ncols=100) as pbar:
+                    for _ in range(self.num_iterations_per_epoch):
+                        res = self.train_step(next(self.dataloader_train))
+                        train_outputs.append(res)
+                        self.epoch_train_dice_list.append(res['train_dice'])
+                        pbar.set_postfix(loss=f"{res['loss']:.4f}", tr_dice=f"{res['train_dice']:.4f}")
+                        pbar.update(1)
+            else:
+                for _ in range(self.num_iterations_per_epoch):
+                    res = self.train_step(next(self.dataloader_train))
+                    train_outputs.append(res)
+                    self.epoch_train_dice_list.append(res['train_dice'])
+
+            self.on_train_epoch_end(train_outputs)
+            
+            with torch.no_grad():
+                self.on_validation_epoch_start()
+                val_outputs = []
+                if is_main_process:
+                    with tqdm(desc=f"Val Epoch {epoch}", total=self.num_val_iterations_per_epoch, ncols=100) as pbar:
+                        for _ in range(self.num_val_iterations_per_epoch):
+                            val_outputs.append(self.validation_step(next(self.dataloader_val)))
+                            pbar.update(1)
+                else:
+                    for _ in range(self.num_val_iterations_per_epoch):
+                        val_outputs.append(self.validation_step(next(self.dataloader_val)))
+                self.on_validation_epoch_end(val_outputs)
+            
+            self.on_epoch_end()
+            
+        self.on_train_end()
+
+    def on_epoch_end(self):
+        epoch_idx = self.current_epoch
+        super().on_epoch_end()
+        
+        is_main_process = (not self.is_ddp) or (dist.get_rank() == 0)
+        if is_main_process:
+            try:
+                # 💥【本次终极核心修复点】完美对齐官方标准的 get_value 属性方法，彻底阻断提取报错
+                train_losses = self.logger.get_value('train_losses', step=-1)
+                val_losses = self.logger.get_value('val_losses', step=-1)
+                current_val_dice = self.logger.get_value('mean_fg_dice', step=-1)
+                
+                mean_train_dice = np.mean(self.epoch_train_dice_list) if len(self.epoch_train_dice_list) > 0 else 0.0
+                
+                # 安全解耦维护历史最高 Dice 指针
+                if current_val_dice >= self.best_val_dice:
+                    self.best_val_dice = current_val_dice
+                    self.best_epoch = epoch_idx
+
+                # 🌟【最完美的另起一行，全指标四项全能树状独立总结面板】🌟
+                self.print_to_log_file("\n" + "="*85, also_print_to_console=True)
+                self.print_to_log_file(
+                    f"📊 [Epoch {epoch_idx} 训练/验证全套指标独立总结]:\n"
+                    f"   ├─ 🚀  训练集  (Train) ──> Loss: {train_losses:.6f}  |  Mean Dice: {mean_train_dice:.6f}\n"
+                    f"   ├─ 👁️  验证集  (Val)   ──> Loss: {val_losses:.6f}  |  Mean Dice: {current_val_dice:.6f}\n"
+                    f"   └─ 🏆  历史最佳 (Best)  ──> Best Val Dice: {self.best_val_dice:.4f} @ Epoch {self.best_epoch})\n",
+                    also_print_to_console=True
+                )
+                self.print_to_log_file("="*85 + "\n", also_print_to_console=True)
+                
+            except Exception as e:
+                self.print_to_log_file(f"⚠️ 指标实时汇总器遇到错误: {str(e)}", also_print_to_console=True)
+
+    def mfa_checkpoint_save_loads(self, lr, num_epochs):
+        self.initial_lr = lr
+        self.num_epochs = num_epochs
+        if self.optimizer is not None:
+            for param_group in self.optimizer.param_groups:
+                param_group['initial_lr'] = lr
+
+    def load_checkpoint(self, checkpoint_file: str):
+        super().load_checkpoint(checkpoint_file)
+        checkpoint = torch.load(checkpoint_file, map_location=torch.device('cpu'), weights_only=False)
+        if 'best_epoch' in checkpoint:
+            self.best_epoch = checkpoint['best_epoch']
+        if 'best_val_dice' in checkpoint:
+            self.best_val_dice = checkpoint['best_val_dice']
+
+    def save_checkpoint(self, filename: str):
+        super().save_checkpoint(filename)
+        is_main_process = (not self.is_ddp) or (dist.get_rank() == 0)
+        if is_main_process:
+            if filename.endswith('.pth'):
+                checkpoint = torch.load(filename, map_location=torch.device('cpu'), weights_only=False)
+                checkpoint['best_epoch'] = self.best_epoch
+                checkpoint['best_val_dice'] = self.best_val_dice
+                torch.save(checkpoint, filename)

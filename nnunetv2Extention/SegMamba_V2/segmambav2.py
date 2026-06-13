@@ -394,6 +394,13 @@ class SegMamba(nn.Module):
         )
         self.out = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=self.out_chans)
         ####
+        
+        
+        if self.deep_supervision:
+            self.out_dec3 = UnetOutBlock(spatial_dims=spatial_dims, in_channels=384, out_channels=self.out_chans)
+            self.out_dec2 = UnetOutBlock(spatial_dims=spatial_dims, in_channels=192, out_channels=self.out_chans)
+            self.out_dec1 = UnetOutBlock(spatial_dims=spatial_dims, in_channels=96, out_channels=self.out_chans)
+        
         # 在 __init__ 中加载预训练权重
         if pretrained_path is not None:
             print(f"[SegMamba] Loading pretrained weights from {pretrained_path}")
@@ -456,11 +463,60 @@ class SegMamba(nn.Module):
         # This model only has one segmentation head, so we return a one-element
         # list for compatibility. If you want true multi-scale supervision, add
         # auxiliary heads for dec1/dec2/dec3 and return them here.
-        if self.deep_supervision:
+        if self.training and self.deep_supervision:
+            dec1=self.out_dec1(dec1)
+            dec2=self.out_dec2(dec2)
+            dec3=self.out_dec3(dec3)
             return [seg_out, dec1, dec2, dec3]
         else:
             return seg_out
 
+    def load_from(self, pretrained_path):
+            if pretrained_path is not None:
+                print(f"[SegMamba 手术式加载] 正在从 {pretrained_path} 载入并改造预训练权重...")
+                checkpoint = torch.load(pretrained_path, map_location="cpu")
+                if "state_dict" in checkpoint:
+                    state_dict = checkpoint["state_dict"]
+                elif "network_weights" in checkpoint:
+                    state_dict = checkpoint["network_weights"]
+                else:
+                    state_dict = checkpoint
+
+                model_dict = self.state_dict()
+                expected_dict = {}
+
+                for k, v in state_dict.items():
+                    # 移除 DDP 包装产生的 module. 前缀
+                    key = k[7:] if k.startswith("module.") else k
+                    
+                    if key in model_dict:
+                        # 💥 核心手术 1: 修复输入层通道不匹配 (Checkpoint 为 4，Model 为 1)
+                        if key == "encoder1.layer.conv1.conv.weight" and v.shape != model_dict[key].shape:
+                            print(f" -> 改造输入层通道: {v.shape} -> {model_dict[key].shape}")
+                            # 截取第一通道，或者取 4 个通道的平均值均可，这里采用取平均
+                            v = v_modified = torch.mean(v, dim=1, keepdim=True)
+                            
+                        if key == "encoder1.layer.conv3.conv.weight" and v.shape != model_dict[key].shape:
+                            print(f" -> 改造输入辅助层通道: {v.shape} -> {model_dict[key].shape}")
+                            v = torch.mean(v, dim=1, keepdim=True)
+
+                        # 💥 核心手术 2: 修复输出层类别数不匹配 (Checkpoint 为 4，Model 为 2)
+                        if key == "out.conv.conv.weight" and v.shape != model_dict[key].shape:
+                            print(f" -> 截取输出层类别权重: {v.shape} -> {model_dict[key].shape}")
+                            v = v[:model_dict[key].shape[0], ...] # 截取前 2 个分类
+                            
+                        if key == "out.conv.conv.bias" and v.shape != model_dict[key].shape:
+                            print(f" -> 截取输出层偏置: {v.shape} -> {model_dict[key].shape}")
+                            v = v[:model_dict[key].shape[0]]
+
+                        # 检查形状是否完美对齐
+                        if v.shape == model_dict[key].shape:
+                            expected_dict[key] = v
+                        else:
+                            print(f" -> 警告: 形状依然不匹配，跳过 {key} {v.shape} vs {model_dict[key].shape}")
+
+                print(f"[SegMamba] 成功手术对齐并加载了 {len(expected_dict)} 个权重项！")
+                self.load_state_dict(expected_dict, strict=False)
 if __name__ == '__main__':
     
     SegMamba = SegMamba(input_channels = 1,num_classes = 1).cuda()

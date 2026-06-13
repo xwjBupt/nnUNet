@@ -198,7 +198,7 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
             
             if is_main_process:
                 # 🌟【核心改动点】将原本的 "Train Epoch 0" 改为具有极强进度感的 "Train Epoch 0/250" 看板形式
-                with tqdm(desc=f"🚀 Train Epoch {epoch}/{self.num_epochs}", total=self.num_iterations_per_epoch, ncols=110) as pbar:
+                with tqdm(desc=f" 🚀 Train Epoch {epoch}", total=self.num_iterations_per_epoch, ncols=110) as pbar:
                     for _ in range(self.num_iterations_per_epoch):
                         res = self.train_step(next(self.dataloader_train))
                         train_outputs.append(res)
@@ -218,7 +218,7 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
                 val_outputs = []
                 if is_main_process:
                     # 🌟【核心改动点】将原本的 "Val Epoch 0" 改为 "Val Epoch 0/250" 对齐看板形式
-                    with tqdm(desc=f"👁️ Val Epoch {epoch}/{self.num_epochs}", total=self.num_val_iterations_per_epoch, ncols=110) as pbar:
+                    with tqdm(desc=f" 👁️ Val Epoch {epoch}", total=self.num_val_iterations_per_epoch, ncols=110) as pbar:
                         for _ in range(self.num_val_iterations_per_epoch):
                             val_outputs.append(self.validation_step(next(self.dataloader_val)))
                             pbar.update(1)
@@ -247,9 +247,9 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
                 self.print_to_log_file("\n" + "="*85, also_print_to_console=True)
                 self.print_to_log_file(
                     f"📊 [Epoch {epoch_idx}/{self.num_epochs} 训练/验证全套指标独立总结]:\n"
-                    f"   ├─ 🚀 训练集 (Train) ──> Loss: {train_losses:.4f}  |  Mean Dice: {mean_train_dice:.4f}\n"
-                    f"   ├─ 👁️ 验证集 (Val)   ──> Loss: {val_losses:.4f}  |  Mean Dice: {current_val_dice:.4f}\n"
-                    f"   └─ 🏆 历史最佳 (Best) ──> Best Val Dice: {self.best_val_dice:.4f} (于第 {self.best_epoch} 个 Epoch 获得)",
+                    f"   ├─ 🚀 训练集  (Train)  ──> Loss: {train_losses:.4f}  |  Mean Dice: {mean_train_dice:.4f}\n"
+                    f"   ├─ 👁️ 验证集  (Val)   ──> Loss: {val_losses:.4f}  |  Mean Dice: {current_val_dice:.4f}\n"
+                    f"   └─ 🏆 历史最佳 (Best)   ──> Best Val Dice: {self.best_val_dice:.4f} (于第 {self.best_epoch} 个 Epoch 获得)",
                     also_print_to_console=True
                 )
                 self.print_to_log_file("="*85 + "\n", also_print_to_console=True)

@@ -1010,7 +1010,7 @@ class nnUNetTrainer(object):
         self.network.train()
         self.lr_scheduler.step(self.current_epoch)
         self.print_to_log_file('')
-        self.print_to_log_file(f'Epoch {self.current_epoch}')
+        self.print_to_log_file(f'Epoch {self.current_epoch} / {self.num_epochs}')
         self.print_to_log_file(
             f"Current learning rate: {np.round(self.optimizer.param_groups[0]['lr'], decimals=5)}")
         # lrs are the same for all workers so we don't need to gather them in case of DDP training

@@ -10,30 +10,45 @@ DATASET_NAME="Dataset515_ICH2023"
 DATASET_ID="515"
 
 # 基础架构配置（跑你的 SegMamba 时，将 TRAINER_NAME 改为 nnUNetTrainerSegMamba）
-CONFIG_NAME="segmamba"
-TRAINER_NAME="nnUNetTrainerSegMamba"  
+CONFIG_NAME="3d_fullres"
+TRAINER_NAME="nnUNetTrainer"  
 # ====================================================================🌟
 
 # 🌟================== 2. 显卡与运算资源自定义配置区 ==================🌟
 # 单卡设为 "5"；若后续 SegMamba 骨干热身完毕切到多卡，直接改写为 "1,2" 即可
-GPU_DEVICES="5"
+GPU_DEVICES="0,1,2,3"
 NUM_THREADS=8  # 后处理与数据增强使用的 CPU 线程数
 # ====================================================================🌟
 
 # 🚀 3. 基于变量全自动派生绝对路径（完美适配任何数据集）
 MODEL_DIR="/home/wjx/CodeData/code/nnUNet/nnUNet_results/${DATASET_NAME}/${TRAINER_NAME}__nnUNetPlans__${CONFIG_NAME}"
-TEST_IMAGES="/home/wjx/CodeData/code/nnUNet/nnUNet_raw/${DATASET_NAME}/imagesTs" # 动态测试集原图
-TEST_LABELS="/home/wjx/CodeData/code/nnUNet/nnUNet_raw/${DATASET_NAME}/labelsTs" # 动态测试集真实标签
+TEST_IMAGES="/home/wjx/CodeData/code/nnUNet/nnUNet_raw/${DATASET_NAME}/imagesTs" 
+TEST_LABELS="/home/wjx/CodeData/code/nnUNet/nnUNet_raw/${DATASET_NAME}/labelsTs" 
 
 # 创建测试输出目标文件夹
-TEST_PRED_DIR="${MODEL_DIR}/Test_predictions"
-TEST_PRED_PP_DIR="${MODEL_DIR}/Test_predictions_PostProcessing"
+TEST_PRED_DIR="${MODEL_DIR}/Test__All_Predictions"
+TEST_PRED_PP_DIR="${MODEL_DIR}/Test__All_Predictions_PostProcessing"
 
-echo "================================================================="
+# 🌟=================================================================🌟
+# 📊 【全新重构：全功能参数大满贯全景高亮看板区】
+# 🌟=================================================================🌟
+echo "====================================================================================="
 echo "🪐 正在拉起 nnU-Net v2 All-in-Test 生产环境通用全流程流水线..."
-echo "   📦 目标数据集: ${DATASET_NAME}"
-echo "   📌 当前绑定显卡: CUDA_VISIBLE_DEVICES=${GPU_DEVICES}"
-echo "================================================================="
+echo "====================================================================================="
+echo "📋 [核心配置环境盘点]:"
+echo "   ├─ 📦 DATASET_NAME     : ${DATASET_NAME} (ID: ${DATASET_ID})"
+echo "   ├─ 🧠 TRAINER_NAME     : ${TRAINER_NAME}"
+echo "   ├─ 📐 CONFIG_NAME      : ${CONFIG_NAME}"
+echo "   ├─ 📌 GPU_DEVICES      : CUDA_VISIBLE_DEVICES=${GPU_DEVICES}"
+echo "   └─ 🧵 NUM_THREADS      : ${NUM_THREADS} CPU Threads"
+echo "-------------------------------------------------------------------------------------"
+echo "📂 [派生绝对物理路径图谱]:"
+echo "   ├─ 📂 MODEL_DIR        : ${MODEL_DIR}"
+echo "   ├─ 🖼️ TEST_IMAGES      : ${TEST_IMAGES}"
+echo "   ├─ 🏷️ TEST_LABELS      : ${TEST_LABELS}"
+echo "   ├─ 🔮 TEST_PRED_DIR    : ${TEST_PRED_DIR}"
+echo "   └─ ✨ TEST_PRED_PP_DIR : ${TEST_PRED_PP_DIR}"
+echo "====================================================================================="
 
 # 💥 STEP 1: 全量数据长跑训练 (Fold = all)
 echo "▶️ [STEP 1/4] 正在拉起全量数据训练模型。注意：此模式下无验证集评估..."
@@ -55,7 +70,7 @@ TOTAL_SAMPLES=$(ls -1 ${TEST_IMAGES}/*.nii.gz 2>/dev/null | wc -l || echo "0")
 echo "📊 系统盘点：独立测试集 [ ${DATASET_NAME} ] 共有 ${TOTAL_SAMPLES} 个待预测文件。"
 echo "-----------------------------------------------------------------"
 
-# 执行多线程推理并通过 awk 实时过滤输出流，优雅高亮显示 [当前/总数] 进度
+# 执行多线程推理并通过 awk 实时过滤输出流，高亮显示 [当前/总数] 进度
 CUDA_VISIBLE_DEVICES=${GPU_DEVICES} nnUNetv2_predict \
   -d ${DATASET_NAME} \
   -i ${TEST_IMAGES} \
@@ -92,8 +107,8 @@ nnUNetv2_evaluate_folder \
   ${TEST_PRED_PP_DIR} \
   -dj ${MODEL_DIR}/dataset.json
 
-echo "================================================================="
-echo "🏆 🎉 恭喜！【训练->测试->后处理->评估】变量参数化通用流水线完美通关！"
+echo "====================================================================================="
+echo "🏆 🎉 恭喜！【训练->测试->后处理->评估】全参数监控通用流水线完美通关！"
 echo "📊 请前往查看你在独立测试集（Test Set）上的最终王牌战报文件："
 echo "👉 ${TEST_PRED_PP_DIR}/summary.json"
-echo "================================================================="
+echo "====================================================================================="

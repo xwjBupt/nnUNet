@@ -22,18 +22,34 @@ NUM_THREADS=8  # 后处理与数据增强使用的 CPU 线程数
 
 # 🚀 3. 基于变量全自动派生绝对路径（完美适配任何数据集）
 MODEL_DIR="/home/wjx/CodeData/code/nnUNet/nnUNet_results/${DATASET_NAME}/${TRAINER_NAME}__nnUNetPlans__${CONFIG_NAME}"
-RAW_IMAGES="/home/wjx/CodeData/code/nnUNet/nnUNet_raw/${DATASET_NAME}/imagesTr" # 动态训练集原图
-RAW_LABELS="/home/wjx/CodeData/code/nnUNet/nnUNet_raw/${DATASET_NAME}/labelsTr" # 动态训练集真实标签
+RAW_IMAGES="/home/wjx/CodeData/code/nnUNet/nnUNet_raw/${DATASET_NAME}/imagesTr" 
+RAW_LABELS="/home/wjx/CodeData/code/nnUNet/nnUNet_raw/${DATASET_NAME}/labelsTr" 
 
 # 创建五折融合输出目标文件夹
 ENSEMBLE_DIR="${MODEL_DIR}/Ensemble"
-POSTPROCESSED_DIR="${MODEL_DIR}/Ensemble_PP"
+POSTPROCESSED_DIR="${MODEL_DIR}/Ensemble_PostProcessing"
 
-echo "================================================================="
+# 🌟=================================================================🌟
+# 📊 【全功能参数大满贯全景高亮看板区 —— 五折交叉验证专用版】
+# 🌟=================================================================🌟
+echo "====================================================================================="
 echo "🪐 正在拉起 nnU-Net v2 Cross-Fold 学术大满贯数据集通用流水线..."
-echo "   📦 目标数据集: ${DATASET_NAME} (ID: ${DATASET_ID})"
-echo "   📌 当前绑定显卡: CUDA_VISIBLE_DEVICES=${GPU_DEVICES}"
-echo "================================================================="
+echo "====================================================================================="
+echo "📋 [五折核心配置环境盘点]:"
+echo "   ├─ 📦 DATASET_NAME     : ${DATASET_NAME} (ID: ${DATASET_ID})"
+echo "   ├─ 🧠 TRAINER_NAME     : ${TRAINER_NAME}"
+echo "   ├─ 📐 CONFIG_NAME      : ${CONFIG_NAME}"
+echo "   ├─ 📌 GPU_DEVICES      : CUDA_VISIBLE_DEVICES=${GPU_DEVICES}"
+echo "   ├─ 🔄 LOOP RANGE       : Fold 0 ──> Fold 4 (串行自动接力)"
+echo "   └─ 🧵 NUM_THREADS      : ${NUM_THREADS} CPU Threads"
+echo "-------------------------------------------------------------------------------------"
+echo "📂 [五折派生绝对物理路径图谱]:"
+echo "   ├─ 📂 MODEL_DIR        : ${MODEL_DIR}"
+echo "   ├─ 🖼️ RAW_IMAGES       : ${RAW_IMAGES}"
+echo "   ├─ 🏷️ RAW_LABELS       : ${RAW_LABELS}"
+echo "   ├─ 🔮 ENSEMBLE_DIR     : ${ENSEMBLE_DIR}"
+echo "   └─ ✨ POSTPROCESSED_DIR: ${POSTPROCESSED_DIR}"
+echo "====================================================================================="
 
 # 💥 STEP 1: 自动化循环训练 Fold 0 到 Fold 4
 for fold in {0..4}
@@ -101,8 +117,8 @@ nnUNetv2_evaluate_folder \
   ${POSTPROCESSED_DIR} \
   -dj ${MODEL_DIR}/dataset.json
 
-echo "================================================================="
+echo "====================================================================================="
 echo "🏆 🎉 五折交叉验证大满贯数据集通用看板流水线已全线通过！"
 echo "📊 请直接前往查看你的终极学术战报 JSON 成果文件："
 echo "👉 ${POSTPROCESSED_DIR}/summary.json"
-echo "================================================================="
+echo "====================================================================================="

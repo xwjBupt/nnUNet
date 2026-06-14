@@ -8,7 +8,7 @@ from queue import Queue
 from threading import Thread
 from time import sleep
 from typing import Tuple, Union, List, Optional
-
+from tqdm import tqdm
 import numpy as np
 import torch
 from acvl_utils.cropping_and_padding.padding import pad_nd_image
@@ -68,7 +68,7 @@ class nnUNetPredictor(object):
 
     def initialize_from_trained_model_folder(self, model_training_output_dir: str,
                                              use_folds: Union[Tuple[Union[int, str]], None],
-                                             checkpoint_name: str = 'checkpoint_final.pth'):
+                                             checkpoint_name: str = 'checkpoint_best.pth'):
         """
         This is used when making predictions with a trained model
         """
@@ -94,6 +94,8 @@ class nnUNetPredictor(object):
                     'inference_allowed_mirroring_axes' in checkpoint.keys() else None
 
             parameters.append(checkpoint['network_weights'])
+            print (f'load network_weights from {os.path.join(model_training_output_dir, checkpoint_name)}')
+
 
         configuration_manager = plans_manager.get_configuration(configuration_name)
         # restore network
@@ -133,7 +135,7 @@ class nnUNetPredictor(object):
         self.list_of_parameters = parameters
 
         # initialize network with first set of parameters, also see https://github.com/MIC-DKFZ/nnUNet/issues/2520
-        network.load_state_dict(parameters[0])
+        network.load_state_dict(parameters[0], strict=False)
 
         self.network = network
 
@@ -519,9 +521,9 @@ class nnUNetPredictor(object):
 
             # messing with state dict names...
             if not isinstance(self.network, OptimizedModule):
-                self.network.load_state_dict(params)
+                self.network.load_state_dict(params, strict=False)
             else:
-                self.network._orig_mod.load_state_dict(params)
+                self.network._orig_mod.load_state_dict(params, strict=False)
 
             # why not leave prediction on device if perform_everything_on_device? Because this may cause the
             # second iteration to crash due to OOM. Grabbing that with try except cause way more bloated code than

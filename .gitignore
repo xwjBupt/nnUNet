@@ -122,3 +122,4 @@ AGENTS.md
 nnUNet_results/*
 *.pt
 *.json
+*play*

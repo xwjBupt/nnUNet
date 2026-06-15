@@ -123,3 +123,10 @@ nnUNet_results/*
 *.pt
 *.json
 *play*
+*.pth
+*tar.gz
+*.zip
+*.pkl
+*.nii.gz
+*.dcm
+

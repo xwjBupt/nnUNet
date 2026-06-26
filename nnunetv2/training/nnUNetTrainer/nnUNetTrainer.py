@@ -6,6 +6,7 @@ import sys
 import warnings
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 from time import time, sleep
 from typing import Tuple, Union, List
 
@@ -72,6 +73,40 @@ from nnunetv2.utilities.label_handling.label_handling import convert_labelmap_to
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
 
 
+def _format_loguru_message(*args, level="INFO", skip=2, sep=" ", include_timestamp=True):
+    message = sep.join(str(a) for a in args)
+    level_field = level.upper().ljust(8)
+
+    frame = inspect.currentframe()
+    try:
+        for _ in range(skip):
+            if frame is None:
+                return message
+            frame = frame.f_back
+        if frame is None:
+            return message
+
+        module = frame.f_globals.get("__name__", "<unknown>")
+        func_name = frame.f_code.co_name
+        line_no = frame.f_lineno
+        callsite = f"{module}:{func_name}:{line_no}"
+        if include_timestamp:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            prefix = f"{timestamp} | {level_field} | {callsite} - "
+        else:
+            prefix = f"{level_field} | {callsite} - "
+        return f"{prefix}{message}" if message else prefix.rstrip()
+    finally:
+        del frame
+
+
+def _append_line_to_file(log_file, line):
+    log_path = Path(log_file)
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(line)
+        f.write("\n")
+
+
 class nnUNetTrainer(object):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
                  device: torch.device = torch.device('cuda')):
@@ -99,15 +134,18 @@ class nnUNetTrainer(object):
 
         # print what device we are using
         if self.is_ddp:  # implicitly it's clear that we use cuda in this case
-            print(f"I am local rank {self.local_rank}. {device_count()} GPUs are available. The world size is "
-                  f"{dist.get_world_size()}."
-                  f"Setting device to {self.device}")
+            print(_format_loguru_message(
+                f"I am local rank {self.local_rank}. {device_count()} GPUs are available. The world size is "
+                f"{dist.get_world_size()}."
+                f"Setting device to {self.device}",
+                skip=2,
+            ))
             self.device = torch.device(type='cuda', index=self.local_rank)
         else:
             if self.device.type == 'cuda':
                 # we might want to let the user pick this but for now please pick the correct GPU with CUDA_VISIBLE_DEVICES=X
                 self.device = torch.device(type='cuda', index=0)
-            print(f"Using device: {self.device}")
+            print(_format_loguru_message(f"Using device: {self.device}", skip=2))
 
         # loading and saving this class for continuing from checkpoint should not happen based on pickling. This
         # would also pickle the network etc. Bad, bad. Instead we just reinstantiate and then load the checkpoint we
@@ -427,8 +465,8 @@ class nnUNetTrainer(object):
             else:
                 oversample_percent = sum(oversample[sample_id_low:sample_id_high]) / batch_size_per_GPU[my_rank]
 
-            print("worker", my_rank, "oversample", oversample_percent)
-            print("worker", my_rank, "batch_size", batch_size_per_GPU[my_rank])
+            self.print_to_log_file("worker", my_rank, "oversample", oversample_percent)
+            self.print_to_log_file("worker", my_rank, "batch_size", batch_size_per_GPU[my_rank])
 
             self.batch_size = batch_size_per_GPU[my_rank]
             self.oversample_foreground_percent = oversample_percent
@@ -513,32 +551,22 @@ class nnUNetTrainer(object):
         return rotation_for_DA, do_dummy_2d_data_aug, initial_patch_size, mirror_axes
 
     def print_to_log_file(self, *args, also_print_to_console=True, add_timestamp=True):
-        if self.local_rank == 0:
-            timestamp = time()
-            dt_object = datetime.fromtimestamp(timestamp)
+        if self.local_rank != 0:
+            return
 
-            if add_timestamp:
-                args = (f"{dt_object}:", *args)
-
-            successful = False
-            max_attempts = 5
-            ctr = 0
-            while not successful and ctr < max_attempts:
-                try:
-                    with open(self.log_file, 'a+') as f:
-                        for a in args:
-                            f.write(str(a))
-                            f.write(" ")
-                        f.write("\n")
-                    successful = True
-                except IOError:
-                    print(f"{datetime.fromtimestamp(timestamp)}: failed to log: ", sys.exc_info())
-                    sleep(0.5)
-                    ctr += 1
+        try:
+            message = _format_loguru_message(*args, level="INFO", skip=2, include_timestamp=add_timestamp)
+            _append_line_to_file(self.log_file, message)
             if also_print_to_console:
-                print(*args)
-        elif also_print_to_console:
-            print(*args)
+                print(message)
+        except IOError:
+            warning_message = _format_loguru_message(
+                f"{datetime.now()}: failed to log:",
+                sys.exc_info(),
+                level="WARNING",
+                skip=2,
+            )
+            print(warning_message)
 
     def print_plans(self):
         if self.local_rank == 0:

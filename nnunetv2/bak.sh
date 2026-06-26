@@ -27,9 +27,9 @@ GPU_DEVICES="0,1,2,3,4,5,6,7"
 # 2. 如果你用 8 张卡，TRAIN_BATCH_SIZE=8 通常相当于每卡 batch size≈1
 # 3. 如果想每卡 batch size≈2，8 张卡时应设置为 16
 # 4. 如果想每卡 batch size≈4，8 张卡时应设置为 32
-TRAIN_BATCH_SIZE=32
+TRAIN_BATCH_SIZE=16
 
-NUM_THREADS=32
+NUM_THREADS=16
 # ====================================================================🌟
 
 

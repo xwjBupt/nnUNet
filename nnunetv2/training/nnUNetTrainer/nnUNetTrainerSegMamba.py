@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
+import shutil
 import numpy as np
 import torch
 import torch.distributed as dist
+from batchgenerators.utilities.file_and_folder_operations import join
 from tqdm import tqdm
 from torch._dynamo import OptimizedModule
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -20,7 +22,7 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
     3. 集成 12.0 模长梯度裁剪数值安全防线。
     4. 彻底对齐官方 get_value 接口，完爆 MetaLogger 属性缺失报错。
     5. 【全新修改】动态拼接进度条描述符，让 Train/Val 的 tqdm 进度条同时高亮显示“当前 Epoch / 总 Epoch”。
-    6. 前 15 个 Epoch 锁定 SegMamba 骨干；第 15 轮多卡恢复时第一秒即全自动解锁全网。
+    6. 默认不再冻结前 15 轮骨干，避免限制 SegMamba 的早期收敛和最终泛化上限。
     7. 仅保留 4 个尺度进行多尺度 Loss 评估（彻底剔除 dec0 深监督信号）。
     8. 每个 Epoch 结束时，另起一行，以精美树状格式统一汇总当前 Epoch 的两端完整数据（Train/Val Loss & Dice）及历史最佳纪录。
     """
@@ -28,9 +30,9 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
     def initialize(self):
         ### 🚀 核心参数自定义配置区（可在此自由修改） 🚀 ###
         # 1. 目标学习率 (nnU-Net 默认是 0.01)
-        self.initial_lr = 1e-3  
+        self.initial_lr = 3e-3  
         # 2. 训练总轮数
-        self.num_epochs = 250  
+        self.num_epochs = 500  
         # 3. 梯度裁剪最大范数 (设为 <= 0 则关闭)
         self.custom_max_grad_norm = 12.0  
         ################################################
@@ -38,6 +40,9 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
         self.best_epoch = 0
         self.best_val_dice = 0.0
         self.epoch_train_dice_list = []
+        self.pretrain_flag = False
+        self.freeze_backbone_epochs = 0
+        self.best_val_checkpoint_file = None
 
         if not self.was_initialized:
             self._set_batch_size_and_oversample()
@@ -79,6 +84,13 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
         self.grad_scaler = None
 
         pretrained_path = self.configuration_manager.network_arch_init_kwargs.get('pretrained_path', None)
+        self.pretrain_flag = pretrained_path
+        if pretrained_path is None:
+            self.print_to_log_file("pretrained_path is none, not loading any pretrained weights. If you want to load pretrained weights, please set the 'pretrained_path' in the network_arch_init_kwargs of the configuration_manager.")
+        else:
+            self.print_to_log_file(f"pretrained_path is {pretrained_path}, loading pretrained weights from this path.")
+            self.pretrain_flag = True
+        self.best_val_checkpoint_file = join(self.output_folder, "checkpoint_best_val.pth")
         if self.current_epoch == 0 and pretrained_path is not None:
             mod = self.network
             if isinstance(mod, DDP):
@@ -172,16 +184,23 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
         warnings.filterwarnings("ignore", message="The epoch parameter in `scheduler.step()`", category=UserWarning)
         self.on_train_start()
 
-        if self.current_epoch < 15:
-            self.print_to_log_file("🔒 [预训练防御] 当前属于前 15 轮热身，锁定 SegMamba 骨干权重...", also_print_to_console=True)
+        if self.freeze_backbone_epochs > 0 and self.current_epoch < self.freeze_backbone_epochs:
+            self.print_to_log_file(
+                f"🔒 [骨干冻结] 当前属于前 {self.freeze_backbone_epochs} 轮冻结阶段，锁定 SegMamba 骨干权重...",
+                also_print_to_console=True,
+            )
             mod = self.network.module if self.is_ddp else self.network
-            if isinstance(mod, OptimizedModule): mod = mod._orig_mod
+            if isinstance(mod, OptimizedModule):
+                mod = mod._orig_mod
             for name, param in mod.named_parameters():
-                if "vit" in name or "decoder" in name: param.requires_grad = False
-                else: param.requires_grad = True
+                if "vit" in name or "decoder" in name:
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True
         else:
-            self.print_to_log_file("🔓 [接力爆发] 检测到已满足15轮热身条件！直接全面解冻全网参数...", also_print_to_console=True)
-            for param in self.network.parameters(): param.requires_grad = True
+            self.print_to_log_file("🔓 [全网训练] 当前不启用骨干冻结，直接训练全网参数...", also_print_to_console=True)
+            for param in self.network.parameters():
+                param.requires_grad = True
 
         is_main_process = (not self.is_ddp) or (dist.get_rank() == 0)
 
@@ -189,9 +208,13 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
             self.on_epoch_start()
             self.on_train_epoch_start()
 
-            if epoch == 15:
-                self.print_to_log_file("🔓 [预训练防御] 15 轮已过！全面解冻全网所有骨干参数...", also_print_to_console=True)
-                for param in self.network.parameters(): param.requires_grad = True
+            if self.freeze_backbone_epochs > 0 and epoch == self.freeze_backbone_epochs:
+                self.print_to_log_file(
+                    f"🔓 [骨干解冻] 冻结阶段结束，全面解冻全网所有参数...",
+                    also_print_to_console=True,
+                )
+                for param in self.network.parameters():
+                    param.requires_grad = True
 
             train_outputs = []
             self.epoch_train_dice_list.clear()
@@ -243,6 +266,8 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
                 if current_val_dice >= self.best_val_dice:
                     self.best_val_dice = current_val_dice
                     self.best_epoch = epoch_idx
+                    if self.best_val_checkpoint_file is not None:
+                        self.save_checkpoint(self.best_val_checkpoint_file)
 
                 self.print_to_log_file("\n" + "="*85, also_print_to_console=True)
                 self.print_to_log_file(
@@ -255,6 +280,26 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
                 self.print_to_log_file("="*85 + "\n", also_print_to_console=True)
             except Exception as e:
                 self.print_to_log_file(f"⚠️ 指标实时汇总器遇到错误: {str(e)}", also_print_to_console=True)
+
+    def on_train_end(self):
+        super().on_train_end()
+        is_main_process = (not self.is_ddp) or (dist.get_rank() == 0)
+        if not is_main_process:
+            return
+        if self.best_val_checkpoint_file is None:
+            return
+        try:
+            shutil.copyfile(self.best_val_checkpoint_file, join(self.output_folder, "checkpoint_final.pth"))
+        except FileNotFoundError:
+            self.print_to_log_file(
+                "⚠️ 未找到 checkpoint_best_val.pth，保留原始 checkpoint_final.pth。",
+                also_print_to_console=True,
+            )
+        else:
+            self.print_to_log_file(
+                f"🏁 已将验证集最优权重同步为最终 checkpoint: {self.best_val_checkpoint_file} -> checkpoint_final.pth",
+                also_print_to_console=True,
+            )
 
     def mfa_checkpoint_save_loads(self, lr, num_epochs):
         self.initial_lr = lr

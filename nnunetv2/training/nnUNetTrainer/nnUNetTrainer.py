@@ -1037,7 +1037,7 @@ class nnUNetTrainer(object):
     def on_train_epoch_start(self):
         self.network.train()
         self.lr_scheduler.step(self.current_epoch)
-        self.print_to_log_file('')
+        self.print_to_log_file("="*85)
         self.print_to_log_file(f'Epoch {self.current_epoch} / {self.num_epochs}')
         self.print_to_log_file(
             f"Current learning rate: {np.round(self.optimizer.param_groups[0]['lr'], decimals=5)}")
@@ -1087,6 +1087,7 @@ class nnUNetTrainer(object):
             loss_here = np.mean(outputs['loss'])
 
         self.logger.log('train_losses', loss_here, self.current_epoch)
+        self.print_to_log_file("="*85)
 
     def on_validation_epoch_start(self):
         self.network.eval()

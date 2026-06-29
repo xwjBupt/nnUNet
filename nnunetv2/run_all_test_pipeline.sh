@@ -12,14 +12,14 @@ DATASET_ID="515"
 
 # 基础架构配置
 # 跑你的 SegMamba 时，保持下面一致
-PLANS_NAME="nnUNetPlans_segmamba_faircmp"
-CONFIG_NAME="segmamba_faircmp"
-TRAINER_NAME="nnUNetTrainerSegMamba"
+PLANS_NAME="nnUNetPlans_segmamba_ui"
+CONFIG_NAME="segmamba_ui"
+TRAINER_NAME="nnUNetTrainerSegMambaUI"
 # ====================================================================🌟
 
 
 # 🌟================== 2. 显卡与运算资源自定义配置区 ==================🌟
-GPU_DEVICES="0,1,2,3,4,5,6,7"
+GPU_DEVICES="0,1,2,3"
 
 # ✅ 这里修改训练 batch size
 # 注意：
@@ -27,7 +27,7 @@ GPU_DEVICES="0,1,2,3,4,5,6,7"
 # 2. 如果你用 8 张卡，TRAIN_BATCH_SIZE=8 通常相当于每卡 batch size≈1
 # 3. 如果想每卡 batch size≈2，8 张卡时应设置为 16
 # 4. 如果想每卡 batch size≈4，8 张卡时应设置为 32
-TRAIN_BATCH_SIZE=32
+TRAIN_BATCH_SIZE=4
 
 NUM_THREADS=32
 # ====================================================================🌟

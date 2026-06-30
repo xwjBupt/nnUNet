@@ -23,7 +23,7 @@ FOLDS="0"
 GPU_DEVICES="4,5,6,7"
 
 # Total batch size used by nnU-Net. For DDP it must be >= number of GPUs.
-TRAIN_BATCH_SIZE=16
+TRAIN_BATCH_SIZE=32
 
 NUM_THREADS=32
 # ====================================================================

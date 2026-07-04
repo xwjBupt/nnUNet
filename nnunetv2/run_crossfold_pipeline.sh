@@ -10,9 +10,9 @@ set -e
 # ================== 1. Dataset/model configuration ==================
 DATASET_ID="518"
 
-PLANS_NAME="nnUNetPlans"
-CONFIG_NAME="3d_fullres"
-TRAINER_NAME="nnUNetTrainer"
+PLANS_NAME="nnUNetPlans_segmamba_bhsd_aniso"
+CONFIG_NAME="segmamba_ui_bhsd_aniso"
+TRAINER_NAME="nnUNetTrainerSegMambaUIBHSDAniso"
 
 # Train these folds. Keep 0 1 2 3 4 for full cross-validation.
 FOLDS="0"
@@ -23,9 +23,9 @@ FOLDS="0"
 GPU_DEVICES="4,5,6,7"
 
 # Total batch size used by nnU-Net. For DDP it must be >= number of GPUs.
-TRAIN_BATCH_SIZE=32
+TRAIN_BATCH_SIZE=4
 
-NUM_THREADS=32
+NUM_THREADS=16
 # ====================================================================
 
 

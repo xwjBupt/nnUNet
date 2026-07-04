@@ -8,13 +8,13 @@ set -e  # 🛡️ 数值安全防线：任何一步报错，立刻强行熔断�
 
 # 🌟================== 1. 数据集 ID 核心配置区 ==================🌟
 # 现在你只需要手动确定 ID 即可，脚本会自动帮你抓取完整的 DATASET_NAME
-DATASET_ID="515"
+DATASET_ID="517"
 
 # 基础架构配置
 # 跑你的 SegMamba 时，保持下面一致
-PLANS_NAME="nnUNetPlans_segmamba_ui"
-CONFIG_NAME="segmamba_ui"
-TRAINER_NAME="nnUNetTrainerSegMambaUI"
+PLANS_NAME="nnUNetPlans"
+CONFIG_NAME="3d_fullres"
+TRAINER_NAME="nnUNetTrainer"
 # ====================================================================🌟
 
 
@@ -27,7 +27,7 @@ GPU_DEVICES="0,1,2,3"
 # 2. 如果你用 8 张卡，TRAIN_BATCH_SIZE=8 通常相当于每卡 batch size≈1
 # 3. 如果想每卡 batch size≈2，8 张卡时应设置为 16
 # 4. 如果想每卡 batch size≈4，8 张卡时应设置为 32
-TRAIN_BATCH_SIZE=4
+TRAIN_BATCH_SIZE=48
 
 NUM_THREADS=32
 # ====================================================================🌟

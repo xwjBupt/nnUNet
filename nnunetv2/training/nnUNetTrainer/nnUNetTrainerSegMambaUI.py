@@ -82,6 +82,10 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
     8. 每个 Epoch 结束时，另起一行，以精美树状格式统一汇总当前 Epoch 的两端完整数据（Train/Val Loss & Dice）及历史最佳纪录。
     """
 
+    default_union_loss_weight = 0.3
+    default_intersection_loss_weight = 0.3
+    default_auxiliary_lr_multiplier = 3.0
+
     def initialize(self):
         ### 🚀 核心参数自定义配置区（可在此自由修改） 🚀 ###
         # 1. 目标学习率 (nnU-Net 默认是 0.01)
@@ -91,10 +95,10 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
         # 3. 梯度裁剪最大范数 (设为 <= 0 则关闭)
         self.custom_max_grad_norm = 12.0  
         # 4. U/I 辅助分支 loss 权重
-        self.union_loss_weight = 0.3
-        self.intersection_loss_weight = 0.3
+        self.union_loss_weight = self.default_union_loss_weight
+        self.intersection_loss_weight = self.default_intersection_loss_weight
         # 5. U/I 分支没有直接预训练，使用更高学习率加速适配
-        self.auxiliary_lr_multiplier = 3.0
+        self.auxiliary_lr_multiplier = self.default_auxiliary_lr_multiplier
         # 6. CosineAnnealingWarmRestarts 参数
         self.lr_restart_t0 = 50
         self.lr_restart_t_mult = 2

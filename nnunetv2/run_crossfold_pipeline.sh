@@ -56,6 +56,22 @@ RAW_IMAGES="${RAW_BASE_DIR}/${DATASET_NAME}/imagesTr"
 RAW_LABELS="${RAW_BASE_DIR}/${DATASET_NAME}/labelsTr"
 PLANS_JSON="${PREPROCESSED_BASE_DIR}/${DATASET_NAME}/${PLANS_NAME}.json"
 CV_DIR="${MODEL_DIR}/crossval_results_folds_0_1_2_3_4"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_COPY_PATH="${MODEL_DIR}/$(basename "$SCRIPT_PATH")"
+
+save_pipeline_script() {
+    local exit_code=$?
+
+    if mkdir -p "$MODEL_DIR" && cp "$SCRIPT_PATH" "$SCRIPT_COPY_PATH"; then
+        echo "Saved pipeline script copy to: $SCRIPT_COPY_PATH"
+    else
+        echo "WARNING: failed to save pipeline script copy to: $SCRIPT_COPY_PATH"
+    fi
+
+    return "$exit_code"
+}
+
+trap save_pipeline_script EXIT
 
 
 # 5. Update plans batch size before training.
@@ -144,28 +160,28 @@ echo "==========================================================================
 
 
 # STEP 1: Train requested folds.
-# for fold in ${FOLDS}; do
-#     echo "-----------------------------------------------------------------"
-#     echo "[STEP 1] Training fold ${fold}"
-#     echo "-----------------------------------------------------------------"
+for fold in ${FOLDS}; do
+    echo "-----------------------------------------------------------------"
+    echo "[STEP 1] Training fold ${fold}"
+    echo "-----------------------------------------------------------------"
 
-#     if [ "$NUM_GPUS" -gt 1 ]; then
-#         CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" nnUNetv2_train \
-#           "${DATASET_NAME}" \
-#           "${CONFIG_NAME}" \
-#           "${fold}" \
-#           -tr "${TRAINER_NAME}" \
-#           -num_gpus "${NUM_GPUS}" \
-#           -p "${PLANS_NAME}"
-#     else
-#         CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" nnUNetv2_train \
-#           "${DATASET_NAME}" \
-#           "${CONFIG_NAME}" \
-#           "${fold}" \
-#           -tr "${TRAINER_NAME}" \
-#           -p "${PLANS_NAME}"
-#     fi
-# done
+    if [ "$NUM_GPUS" -gt 1 ]; then
+        CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" nnUNetv2_train \
+          "${DATASET_NAME}" \
+          "${CONFIG_NAME}" \
+          "${fold}" \
+          -tr "${TRAINER_NAME}" \
+          -num_gpus "${NUM_GPUS}" \
+          -p "${PLANS_NAME}"
+    else
+        CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" nnUNetv2_train \
+          "${DATASET_NAME}" \
+          "${CONFIG_NAME}" \
+          "${fold}" \
+          -tr "${TRAINER_NAME}" \
+          -p "${PLANS_NAME}"
+    fi
+done
 
 
 # STEP 2: Accumulate cross-validation predictions and determine postprocessing.

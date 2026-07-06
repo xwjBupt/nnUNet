@@ -71,6 +71,22 @@ TEST_PRED_DIR="${MODEL_DIR}/Test_All_Predictions"
 TEST_PRED_PP_DIR="${MODEL_DIR}/Test_All_Predictions_PostProcessing"
 
 PLANS_JSON="${PREPROCESSED_BASE_DIR}/${DATASET_NAME}/${PLANS_NAME}.json"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_COPY_PATH="${MODEL_DIR}/$(basename "$SCRIPT_PATH")"
+
+save_pipeline_script() {
+    local exit_code=$?
+
+    if mkdir -p "$MODEL_DIR" && cp "$SCRIPT_PATH" "$SCRIPT_COPY_PATH"; then
+        echo "📄 已保存当前流水线脚本副本到: $SCRIPT_COPY_PATH"
+    else
+        echo "⚠️ 警告: 保存当前流水线脚本副本失败: $SCRIPT_COPY_PATH"
+    fi
+
+    return "$exit_code"
+}
+
+trap save_pipeline_script EXIT
 
 
 # 🚀 6. 训练前自动修改 plans.json 中的 batch_size

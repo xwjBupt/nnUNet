@@ -8,11 +8,11 @@
 set -e
 
 # ================== 1. Dataset/model configuration ==================
-DATASET_ID="518"
+DATASET_ID="517"
 
-PLANS_NAME="nnUNetPlans_segmamba_bhsd_aniso"
-CONFIG_NAME="segmamba_bhsd_aniso"
-TRAINER_NAME="nnUNetTrainerSegMambaUIBHSDAniso"
+PLANS_NAME="nnUNetPlans_segmamba_uig"
+CONFIG_NAME="segmamba"
+TRAINER_NAME="nnUNetTrainerSegMamba"
 
 # Train these folds. Keep 0 1 2 3 4 for full cross-validation.
 FOLDS="0"
@@ -20,10 +20,10 @@ FOLDS="0"
 
 
 # ================== 2. GPU/resource configuration ==================
-GPU_DEVICES="0,1,2,3"
+GPU_DEVICES="4,5,6,7"
 
 # Total batch size used by nnU-Net. For DDP it must be >= number of GPUs.
-TRAIN_BATCH_SIZE=32
+TRAIN_BATCH_SIZE=8
 
 NUM_THREADS=16
 # ====================================================================
@@ -72,6 +72,110 @@ save_pipeline_script() {
 }
 
 trap save_pipeline_script EXIT
+
+
+# Append one nnU-Net summary.json to the results board. Re-running the same
+# experiment updates its existing row instead of creating a duplicate.
+update_resultsboard() {
+    local summary_path="$1"
+    local fold_value="$2"
+
+    python3 - \
+      "$RESULTS_BASE_DIR" \
+      "$DATASET_NAME" \
+      "$MODEL_DIR" \
+      "$summary_path" \
+      "$fold_value" <<'PY'
+import csv
+import fcntl
+import json
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+results_dir = Path(sys.argv[1]).resolve()
+dataset = sys.argv[2]
+model_dir = Path(sys.argv[3]).resolve()
+summary_path = Path(sys.argv[4]).resolve()
+fold = sys.argv[5]
+board_path = results_dir / "resultsboard.csv"
+lock_path = results_dir / ".resultsboard.csv.lock"
+metric_names = ["Dice", "FN", "FP", "IoU", "TN", "TP", "n_pred", "n_ref"]
+fieldnames = ["dataset", "relative_path", "fold", *metric_names]
+
+if not summary_path.is_file():
+    raise FileNotFoundError(f"Summary file not found: {summary_path}")
+
+try:
+    relative_path = model_dir.relative_to(results_dir / dataset).as_posix()
+except ValueError as exc:
+    raise RuntimeError(
+        f"Model directory {model_dir} is not under {results_dir / dataset}"
+    ) from exc
+
+with summary_path.open("r", encoding="utf-8") as f:
+    foreground_mean = json.load(f)["foreground_mean"]
+
+missing_metrics = [name for name in metric_names if name not in foreground_mean]
+if missing_metrics:
+    raise RuntimeError(
+        f"{summary_path} foreground_mean is missing metrics: {missing_metrics}"
+    )
+
+new_row = {
+    "dataset": dataset,
+    "relative_path": relative_path,
+    "fold": fold,
+    **{name: f"{float(foreground_mean[name]):.5f}" for name in metric_names},
+}
+
+results_dir.mkdir(parents=True, exist_ok=True)
+with lock_path.open("a+", encoding="utf-8") as lock_file:
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+    rows = []
+    if board_path.is_file() and board_path.stat().st_size:
+        with board_path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames != fieldnames:
+                raise RuntimeError(
+                    f"{board_path} columns are {reader.fieldnames}; expected {fieldnames}"
+                )
+            rows = list(reader)
+
+    key = (dataset, relative_path, fold)
+    old_count = len(rows)
+    rows = [
+        row for row in rows
+        if (row["dataset"], row["relative_path"], row["fold"]) != key
+    ]
+    action = "Updated" if len(rows) != old_count else "Appended"
+    rows.append(new_row)
+    rows.sort(key=lambda row: (row["dataset"], row["relative_path"], row["fold"]))
+
+    fd, temp_name = tempfile.mkstemp(
+        prefix=".resultsboard.", suffix=".csv", dir=results_dir
+    )
+    try:
+        if board_path.exists():
+            os.chmod(temp_name, stat.S_IMODE(board_path.stat().st_mode))
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temp_name, board_path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+print(f"{action} results board: {dataset}, {relative_path}, {fold}")
+PY
+}
 
 
 # 5. Update plans batch size before training.
@@ -181,6 +285,10 @@ for fold in ${FOLDS}; do
           -tr "${TRAINER_NAME}" \
           -p "${PLANS_NAME}"
     fi
+
+    update_resultsboard \
+      "${MODEL_DIR}/fold_${fold}/validation/summary.json" \
+      "fold${fold}/validation"
 done
 
 
@@ -197,6 +305,16 @@ if [ "${FOLDS}" = "0 1 2 3 4" ]; then
       -tr "${TRAINER_NAME}" \
       -p "${PLANS_NAME}" \
       -np "${NUM_THREADS}"
+
+    update_resultsboard \
+      "${CV_DIR}/summary.json" \
+      "crossval_results_folds_0_1_2_3_4"
+
+    if [ -f "${CV_DIR}/postprocessed/summary.json" ]; then
+        update_resultsboard \
+          "${CV_DIR}/postprocessed/summary.json" \
+          "crossval_results_folds_0_1_2_3_4/postprocessed"
+    fi
 
     echo "-----------------------------------------------------------------"
     echo "[STEP 3] Final cross-validation results"

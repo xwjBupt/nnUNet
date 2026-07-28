@@ -8,18 +8,18 @@ set -e  # 🛡️ 数值安全防线：任何一步报错，立刻强行熔断�
 
 # 🌟================== 1. 数据集 ID 核心配置区 ==================🌟
 # 现在你只需要手动确定 ID 即可，脚本会自动帮你抓取完整的 DATASET_NAME
-DATASET_ID="517"
+DATASET_ID="515"
 
 # 基础架构配置
 # 跑你的 SegMamba 时，保持下面一致
-PLANS_NAME="nnUNetPlans"
-CONFIG_NAME="3d_fullres"
-TRAINER_NAME="nnUNetTrainer"
+PLANS_NAME="nnUNetPlans_segmamba_ui"
+CONFIG_NAME="segmamba_uig_lite_128x96x96"
+TRAINER_NAME="nnUNetTrainerSegMambaUIGStable"
 # ====================================================================🌟
 
 
 # 🌟================== 2. 显卡与运算资源自定义配置区 ==================🌟
-GPU_DEVICES="0,1,2,3"
+GPU_DEVICES="0,1,2,3,4,5,6,7"  # 你想用的 GPU 卡号，逗号分隔
 
 # ✅ 这里修改训练 batch size
 # 注意：
@@ -27,7 +27,7 @@ GPU_DEVICES="0,1,2,3"
 # 2. 如果你用 8 张卡，TRAIN_BATCH_SIZE=8 通常相当于每卡 batch size≈1
 # 3. 如果想每卡 batch size≈2，8 张卡时应设置为 16
 # 4. 如果想每卡 batch size≈4，8 张卡时应设置为 32
-TRAIN_BATCH_SIZE=48
+TRAIN_BATCH_SIZE=16
 
 NUM_THREADS=32
 # ====================================================================🌟
@@ -87,6 +87,109 @@ save_pipeline_script() {
 }
 
 trap save_pipeline_script EXIT
+
+
+# 将一个 nnU-Net summary.json 追加到结果看板；同一实验重复运行时更新原记录。
+update_resultsboard() {
+    local summary_path="$1"
+    local fold_value="$2"
+
+    python3 - \
+      "$RESULTS_BASE_DIR" \
+      "$DATASET_NAME" \
+      "$MODEL_DIR" \
+      "$summary_path" \
+      "$fold_value" <<'PY'
+import csv
+import fcntl
+import json
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+results_dir = Path(sys.argv[1]).resolve()
+dataset = sys.argv[2]
+model_dir = Path(sys.argv[3]).resolve()
+summary_path = Path(sys.argv[4]).resolve()
+fold = sys.argv[5]
+board_path = results_dir / "resultsboard.csv"
+lock_path = results_dir / ".resultsboard.csv.lock"
+metric_names = ["Dice", "FN", "FP", "IoU", "TN", "TP", "n_pred", "n_ref"]
+fieldnames = ["dataset", "relative_path", "fold", *metric_names]
+
+if not summary_path.is_file():
+    raise FileNotFoundError(f"评估结果不存在: {summary_path}")
+
+try:
+    relative_path = model_dir.relative_to(results_dir / dataset).as_posix()
+except ValueError as exc:
+    raise RuntimeError(
+        f"模型目录 {model_dir} 不在数据集结果目录 {results_dir / dataset} 下"
+    ) from exc
+
+with summary_path.open("r", encoding="utf-8") as f:
+    foreground_mean = json.load(f)["foreground_mean"]
+
+missing_metrics = [name for name in metric_names if name not in foreground_mean]
+if missing_metrics:
+    raise RuntimeError(
+        f"{summary_path} 的 foreground_mean 缺少指标: {missing_metrics}"
+    )
+
+new_row = {
+    "dataset": dataset,
+    "relative_path": relative_path,
+    "fold": fold,
+    **{name: f"{float(foreground_mean[name]):.5f}" for name in metric_names},
+}
+
+results_dir.mkdir(parents=True, exist_ok=True)
+with lock_path.open("a+", encoding="utf-8") as lock_file:
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+    rows = []
+    if board_path.is_file() and board_path.stat().st_size:
+        with board_path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames != fieldnames:
+                raise RuntimeError(
+                    f"{board_path} 列格式不匹配: {reader.fieldnames}; 期望: {fieldnames}"
+                )
+            rows = list(reader)
+
+    key = (dataset, relative_path, fold)
+    old_count = len(rows)
+    rows = [
+        row for row in rows
+        if (row["dataset"], row["relative_path"], row["fold"]) != key
+    ]
+    action = "更新" if len(rows) != old_count else "追加"
+    rows.append(new_row)
+    rows.sort(key=lambda row: (row["dataset"], row["relative_path"], row["fold"]))
+
+    fd, temp_name = tempfile.mkstemp(
+        prefix=".resultsboard.", suffix=".csv", dir=results_dir
+    )
+    try:
+        if board_path.exists():
+            os.chmod(temp_name, stat.S_IMODE(board_path.stat().st_mode))
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temp_name, board_path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+print(f"📊 已{action}结果看板: {dataset}, {relative_path}, {fold}")
+PY
+}
 
 
 # 🚀 6. 训练前自动修改 plans.json 中的 batch_size
@@ -216,6 +319,10 @@ else
       -p "${PLANS_NAME}"
 fi
 
+update_resultsboard \
+  "${MODEL_DIR}/fold_all/validation/summary.json" \
+  "fold_all/validation"
+
 echo "▶| [STEP 1/4 STOP >>>>>>]"
 echo "-----------------------------------------------------------------"
 
@@ -297,6 +404,10 @@ nnUNetv2_evaluate_folder \
   "${TEST_PRED_PP_DIR}" \
   -djfile "${MODEL_DIR}/dataset.json" \
   -pfile "${MODEL_DIR}/plans.json"
+
+update_resultsboard \
+  "${TEST_PRED_PP_DIR}/summary.json" \
+  "Test_All_Predictions_PostProcessing"
 
 echo "▶| [STEP 4/4 STOP >>>>>>]"
 

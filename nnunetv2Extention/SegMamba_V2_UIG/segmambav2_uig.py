@@ -192,6 +192,7 @@ class UIPriorFusionBlock(nn.Module):
         reduction: int = 4,
         num_heads: int = 4,
         attention_pool_size: Sequence[int] = (4, 4, 4),
+        residual_scale_limit: Optional[float] = None,
     ) -> None:
         super().__init__()
         hidden = max(channels // reduction, 8)
@@ -199,6 +200,7 @@ class UIPriorFusionBlock(nn.Module):
         if channels % num_heads != 0:
             raise ValueError(f"channels={channels} must be divisible by num_heads={num_heads}.")
         self.attention_pool_size = tuple(attention_pool_size)
+        self.residual_scale_limit = residual_scale_limit
 
         def projection():
             return nn.Sequential(
@@ -268,6 +270,11 @@ class UIPriorFusionBlock(nn.Module):
         self.boundary_scale = nn.Parameter(torch.zeros(1))
         self.transformer_scale = nn.Parameter(torch.zeros(1))
 
+    def _scale(self, value: torch.Tensor) -> torch.Tensor:
+        if self.residual_scale_limit is None:
+            return value
+        return float(self.residual_scale_limit) * torch.tanh(value)
+
     def _pooled_tokens(self, feature: torch.Tensor):
         pooled = F.adaptive_avg_pool3d(feature, self.attention_pool_size)
         tokens = pooled.flatten(2).transpose(1, 2).contiguous()
@@ -312,9 +319,9 @@ class UIPriorFusionBlock(nn.Module):
         transformer_prior = self._tokens_to_feature(attended_tokens, main_feature.shape[2:])
         return (
             main_feature
-            + self.prior_scale * (adaptive_prior - main_context)
-            + self.boundary_scale * boundary_prior
-            + self.transformer_scale * transformer_prior
+            + self._scale(self.prior_scale) * (adaptive_prior - main_context)
+            + self._scale(self.boundary_scale) * boundary_prior
+            + self._scale(self.transformer_scale) * transformer_prior
         )
 
 
@@ -413,6 +420,9 @@ class SegMamba(nn.Module):
         in_chans: Optional[int] = None,
         out_chans: Optional[int] = None,
         pretrained_path: Optional[str] = None,
+        fusion_levels: Optional[Sequence[str]] = None,
+        detach_ui_features: bool = False,
+        fusion_residual_scale_limit: Optional[float] = None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -437,6 +447,8 @@ class SegMamba(nn.Module):
         self.feat_size = tuple(feat_size)
         self.layer_scale_init_value = layer_scale_init_value
         self.deep_supervision = deep_supervision
+        self.fusion_levels = self._normalize_fusion_levels(fusion_levels)
+        self.detach_ui_features = bool(detach_ui_features)
 
         self.spatial_dims = spatial_dims
         self.vit = MambaEncoder(self.in_chans, 
@@ -633,11 +645,12 @@ class SegMamba(nn.Module):
         )
         self.i_out = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=2)
 
-        self.ui_fusion_dec3 = UIPriorFusionBlock(self.feat_size[3], norm_name=norm_name)
-        self.ui_fusion_dec2 = UIPriorFusionBlock(self.feat_size[2], norm_name=norm_name)
-        self.ui_fusion_dec1 = UIPriorFusionBlock(self.feat_size[1], norm_name=norm_name)
-        self.ui_fusion_dec0 = UIPriorFusionBlock(self.feat_size[0], norm_name=norm_name)
-        self.ui_fusion_out = UIPriorFusionBlock(self.feat_size[0], norm_name=norm_name)
+        fusion_kwargs = {"norm_name": norm_name, "residual_scale_limit": fusion_residual_scale_limit}
+        self.ui_fusion_dec3 = UIPriorFusionBlock(self.feat_size[3], **fusion_kwargs)
+        self.ui_fusion_dec2 = UIPriorFusionBlock(self.feat_size[2], **fusion_kwargs)
+        self.ui_fusion_dec1 = UIPriorFusionBlock(self.feat_size[1], **fusion_kwargs)
+        self.ui_fusion_dec0 = UIPriorFusionBlock(self.feat_size[0], **fusion_kwargs)
+        self.ui_fusion_out = UIPriorFusionBlock(self.feat_size[0], **fusion_kwargs)
 
         if self.deep_supervision:
             self.out_dec3 = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[3], out_channels=self.out_chans)
@@ -690,6 +703,27 @@ class SegMamba(nn.Module):
         x = x.permute(self.proj_axes).contiguous()
         return x
 
+    @staticmethod
+    def _normalize_fusion_levels(fusion_levels: Optional[Sequence[str]]):
+        valid = ("dec3", "dec2", "dec1", "dec0", "out")
+        if fusion_levels is None:
+            return set(valid)
+        if isinstance(fusion_levels, str):
+            fusion_levels = [part.strip() for part in fusion_levels.split(",") if part.strip()]
+        unknown = set(fusion_levels) - set(valid)
+        if unknown:
+            raise ValueError(f"Unknown UIG fusion levels {sorted(unknown)}. Valid levels are {valid}.")
+        return set(fusion_levels)
+
+    def _maybe_fuse(self, level: str, block: nn.Module, main_feature: torch.Tensor,
+                    union_feature: torch.Tensor, intersection_feature: torch.Tensor) -> torch.Tensor:
+        if level not in self.fusion_levels:
+            return main_feature
+        if self.detach_ui_features:
+            union_feature = union_feature.detach()
+            intersection_feature = intersection_feature.detach()
+        return block(main_feature, union_feature, intersection_feature)
+
     def forward(self, x_in):
         enc1 = self.encoder1(x_in)
         outs = self.vit(enc1)
@@ -717,15 +751,15 @@ class SegMamba(nn.Module):
         i_seg_out = self.i_out(i_out_feat)
 
         dec3 = self.decoder5(enc_hidden, enc4)#384*16*16*16
-        dec3 = self.ui_fusion_dec3(dec3, u_dec3, i_dec3)
+        dec3 = self._maybe_fuse("dec3", self.ui_fusion_dec3, dec3, u_dec3, i_dec3)
         dec2 = self.decoder4(dec3, enc3)#192*32*32*32
-        dec2 = self.ui_fusion_dec2(dec2, u_dec2, i_dec2)
+        dec2 = self._maybe_fuse("dec2", self.ui_fusion_dec2, dec2, u_dec2, i_dec2)
         dec1 = self.decoder3(dec2, enc2)#96*64*64*64
-        dec1 = self.ui_fusion_dec1(dec1, u_dec1, i_dec1)
+        dec1 = self._maybe_fuse("dec1", self.ui_fusion_dec1, dec1, u_dec1, i_dec1)
         dec0 = self.decoder2(dec1, enc1)#48*128*128*128
-        dec0 = self.ui_fusion_dec0(dec0, u_dec0, i_dec0)
+        dec0 = self._maybe_fuse("dec0", self.ui_fusion_dec0, dec0, u_dec0, i_dec0)
         out = self.decoder1(dec0)
-        out = self.ui_fusion_out(out, u_out_feat, i_out_feat)
+        out = self._maybe_fuse("out", self.ui_fusion_out, out, u_out_feat, i_out_feat)
         seg_out = self.out(out)#Class*128*128*128
 
         if self.deep_supervision:

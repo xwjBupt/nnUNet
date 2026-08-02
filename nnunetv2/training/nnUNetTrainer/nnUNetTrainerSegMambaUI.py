@@ -283,6 +283,10 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
             return output.get("seg"), output.get("u"), output.get("i")
         return output, None, None
 
+    def _compute_additional_branch_loss(self, seg_output, u_output, i_output):
+        reference = self._first_output(seg_output)
+        return reference.new_zeros(())
+
     def _make_union_intersection_targets(self, target):
         target_list = self._as_list(target)
         base_target = target_list[0]
@@ -345,10 +349,16 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
         loss_seg = self.loss(seg_output, target)
         loss_u = self.ui_loss(u_output, u_target) if u_output is not None else loss_seg.new_tensor(0.0)
         loss_i = self.ui_loss(i_output, i_target) if i_output is not None else loss_seg.new_tensor(0.0)
-        l = loss_seg + self.union_loss_weight * loss_u + self.intersection_loss_weight * loss_i
+        loss_additional = self._compute_additional_branch_loss(seg_output, u_output, i_output)
+        l = (
+            loss_seg
+            + self.union_loss_weight * loss_u
+            + self.intersection_loss_weight * loss_i
+            + loss_additional
+        )
         if torch.isnan(l) or torch.isinf(l):
             return {
-                'loss': 0.0, 'loss_seg': 0.0, 'loss_u': 0.0, 'loss_i': 0.0,
+                'loss': 0.0, 'loss_seg': 0.0, 'loss_u': 0.0, 'loss_i': 0.0, 'loss_additional': 0.0,
                 'train_dice': 0.0, 'train_dice_seg': 0.0, 'train_dice_u': 0.0, 'train_dice_i': 0.0,
             }
         l.backward()
@@ -367,6 +377,7 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
             'loss_seg': loss_seg.detach().cpu().item(),
             'loss_u': loss_u.detach().cpu().item(),
             'loss_i': loss_i.detach().cpu().item(),
+            'loss_additional': loss_additional.detach().cpu().item(),
             'train_dice': step_dice,
             'train_dice_seg': step_dice,
             'train_dice_u': u_dice,
@@ -381,12 +392,18 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
         del data
         seg_output, u_output, i_output = self._split_network_output(output)
         u_target, i_target = self._make_union_intersection_targets(target)
+        loss_additional = self._compute_additional_branch_loss(seg_output, u_output, i_output)
 
         if self.enable_deep_supervision and isinstance(seg_output, (list, tuple)):
             loss_seg = self.loss(seg_output, target)
             loss_u = self.ui_loss(u_output, u_target) if u_output is not None else loss_seg.new_tensor(0.0)
             loss_i = self.ui_loss(i_output, i_target) if i_output is not None else loss_seg.new_tensor(0.0)
-            l = loss_seg + self.union_loss_weight * loss_u + self.intersection_loss_weight * loss_i
+            l = (
+                loss_seg
+                + self.union_loss_weight * loss_u
+                + self.intersection_loss_weight * loss_i
+                + loss_additional
+            )
             output = seg_output[0]
             target_main = target[0]
             u_output_main = u_output[0] if u_output is not None else None
@@ -402,7 +419,12 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
             loss_seg = base_loss(seg_output, target_main)
             loss_u = base_ui_loss(u_output, u_target_main) if u_output is not None else loss_seg.new_tensor(0.0)
             loss_i = base_ui_loss(i_output, i_target_main) if i_output is not None else loss_seg.new_tensor(0.0)
-            l = loss_seg + self.union_loss_weight * loss_u + self.intersection_loss_weight * loss_i
+            l = (
+                loss_seg
+                + self.union_loss_weight * loss_u
+                + self.intersection_loss_weight * loss_i
+                + loss_additional
+            )
             output = seg_output
             u_output_main = u_output
             i_output_main = i_output
@@ -427,6 +449,7 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
             'loss_seg': loss_seg.detach().cpu().item(),
             'loss_u': loss_u.detach().cpu().item(),
             'loss_i': loss_i.detach().cpu().item(),
+            'loss_additional': loss_additional.detach().cpu().item(),
             'tp_hard': tp_hard,
             'fp_hard': fp_hard,
             'fn_hard': fn_hard,
@@ -548,7 +571,15 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
 
         logs = self.logger.local_logger.my_fantastic_logging
         groups = [
-            ("Loss", ("train_losses_seg", "val_losses_seg", "train_losses_u", "val_losses_u", "train_losses_i", "val_losses_i")),
+            (
+                "Loss",
+                (
+                    "train_losses_seg", "val_losses_seg",
+                    "train_losses_u", "val_losses_u",
+                    "train_losses_i", "val_losses_i",
+                    "train_losses_hierarchy", "val_losses_hierarchy",
+                ),
+            ),
             ("Dice", ("train_dice_seg", "val_dice_seg", "train_dice_u", "val_dice_u", "train_dice_i", "val_dice_i")),
         ]
         fig, axes = plt.subplots(1, 2, figsize=(16, 5), dpi=120)

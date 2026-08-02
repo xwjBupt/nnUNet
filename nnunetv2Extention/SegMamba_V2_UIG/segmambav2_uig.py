@@ -325,6 +325,141 @@ class UIPriorFusionBlock(nn.Module):
         )
 
 
+class UILogitBoundaryFusionBlock(nn.Module):
+    """Apply a bounded residual only where U and I predictions disagree."""
+
+    def __init__(
+        self,
+        channels: int,
+        norm_name: str = "instance",
+        residual_scale_limit: Optional[float] = 0.1,
+    ) -> None:
+        super().__init__()
+        norm = nn.InstanceNorm3d if norm_name == "instance" else nn.BatchNorm3d
+        self.residual_scale_limit = residual_scale_limit
+
+        def projection():
+            return nn.Sequential(
+                nn.Conv3d(channels, channels, kernel_size=1, bias=False),
+                norm(channels),
+                nn.ReLU(inplace=True),
+            )
+
+        self.union_projection = projection()
+        self.intersection_projection = projection()
+        self.boundary_refine = nn.Sequential(
+            nn.Conv3d(channels, channels, kernel_size=3, padding=1, groups=channels, bias=False),
+            norm(channels),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(channels, channels, kernel_size=1, bias=False),
+            norm(channels),
+        )
+        self.channel_gate = nn.Sequential(
+            nn.AdaptiveAvgPool3d(1),
+            nn.Conv3d(channels, channels, kernel_size=1),
+            nn.Sigmoid(),
+        )
+        self.residual_scale = nn.Parameter(torch.zeros(1))
+
+    def _scale(self) -> torch.Tensor:
+        if self.residual_scale_limit is None:
+            return self.residual_scale
+        return float(self.residual_scale_limit) * torch.tanh(self.residual_scale)
+
+    @staticmethod
+    def _foreground_probability(logits: torch.Tensor) -> torch.Tensor:
+        if logits.shape[1] == 1:
+            return torch.sigmoid(logits)
+        return torch.softmax(logits, dim=1)[:, 1:].sum(dim=1, keepdim=True)
+
+    def forward(
+        self,
+        main_feature: torch.Tensor,
+        union_feature: torch.Tensor,
+        intersection_feature: torch.Tensor,
+        union_logits: torch.Tensor,
+        intersection_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        output_shape = main_feature.shape[2:]
+        if union_logits.shape[2:] != output_shape:
+            union_logits = F.interpolate(union_logits, size=output_shape, mode="trilinear", align_corners=False)
+        if intersection_logits.shape[2:] != output_shape:
+            intersection_logits = F.interpolate(
+                intersection_logits, size=output_shape, mode="trilinear", align_corners=False
+            )
+
+        union_probability = self._foreground_probability(union_logits)
+        intersection_probability = self._foreground_probability(intersection_logits)
+        uncertain_band = torch.clamp(union_probability - intersection_probability, min=0.0, max=1.0)
+
+        union_context = self.union_projection(union_feature)
+        intersection_context = self.intersection_projection(intersection_feature)
+        boundary_residual = self.boundary_refine(union_context - intersection_context)
+        boundary_residual = boundary_residual * self.channel_gate(main_feature)
+        return main_feature + self._scale() * uncertain_band * boundary_residual
+
+
+class UIHierarchyConfidenceLogitFusion(nn.Module):
+    """Correct main logits only where I or U provides high-confidence guidance."""
+
+    def __init__(self, scale_limit: float = 1.0, detach_guidance: bool = True) -> None:
+        super().__init__()
+        if scale_limit <= 0:
+            raise ValueError(f"scale_limit must be positive, got {scale_limit}.")
+        self.scale_limit = float(scale_limit)
+        self.detach_guidance = bool(detach_guidance)
+        self.promotion_scale = nn.Parameter(torch.zeros(1))
+        self.suppression_scale = nn.Parameter(torch.zeros(1))
+
+    @staticmethod
+    def _foreground_probability(logits: torch.Tensor) -> torch.Tensor:
+        if logits.shape[1] == 1:
+            return torch.sigmoid(logits)
+        return torch.softmax(logits, dim=1)[:, 1:].sum(dim=1, keepdim=True)
+
+    def _bounded_nonnegative_scale(self, value: torch.Tensor) -> torch.Tensor:
+        clamped = torch.clamp(value, min=0.0, max=self.scale_limit)
+        return value + (clamped - value).detach()
+
+    def forward(
+        self,
+        main_logits: torch.Tensor,
+        union_logits: torch.Tensor,
+        intersection_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        if main_logits.shape[1] < 2:
+            raise ValueError("Hierarchy confidence fusion requires background and foreground logits.")
+        output_shape = main_logits.shape[2:]
+        if union_logits.shape[2:] != output_shape:
+            union_logits = F.interpolate(union_logits, size=output_shape, mode="trilinear", align_corners=False)
+        if intersection_logits.shape[2:] != output_shape:
+            intersection_logits = F.interpolate(
+                intersection_logits, size=output_shape, mode="trilinear", align_corners=False
+            )
+
+        main_probability = self._foreground_probability(main_logits)
+        union_probability = self._foreground_probability(union_logits)
+        intersection_probability = self._foreground_probability(intersection_logits)
+        if self.detach_guidance:
+            main_probability = main_probability.detach()
+            union_probability = union_probability.detach()
+            intersection_probability = intersection_probability.detach()
+
+        missed_core = intersection_probability * (1.0 - main_probability)
+        false_positive_outside = (1.0 - union_probability) * main_probability
+        correction = (
+            self._bounded_nonnegative_scale(self.promotion_scale) * missed_core
+            - self._bounded_nonnegative_scale(self.suppression_scale) * false_positive_outside
+        )
+
+        background_correction = -0.5 * correction
+        foreground_correction = 0.5 * correction / (main_logits.shape[1] - 1)
+        foreground_correction = foreground_correction.expand(
+            -1, main_logits.shape[1] - 1, *main_logits.shape[2:]
+        )
+        return main_logits + torch.cat((background_correction, foreground_correction), dim=1)
+
+
 class MambaEncoder(nn.Module):
     def __init__(self, in_chans=1, depths=[2, 2, 2, 2], dims=[48, 96, 192, 384],
                  drop_path_rate=0., layer_scale_init_value=1e-6, out_indices=[0, 1, 2, 3]):
@@ -421,8 +556,11 @@ class SegMamba(nn.Module):
         out_chans: Optional[int] = None,
         pretrained_path: Optional[str] = None,
         fusion_levels: Optional[Sequence[str]] = None,
+        fusion_mode: str = "prior",
         detach_ui_features: bool = False,
         fusion_residual_scale_limit: Optional[float] = None,
+        output_fusion_mode: str = "none",
+        output_fusion_scale_limit: float = 1.0,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -448,7 +586,11 @@ class SegMamba(nn.Module):
         self.layer_scale_init_value = layer_scale_init_value
         self.deep_supervision = deep_supervision
         self.fusion_levels = self._normalize_fusion_levels(fusion_levels)
+        self.fusion_mode = self._normalize_fusion_mode(fusion_mode)
         self.detach_ui_features = bool(detach_ui_features)
+        self.output_fusion_mode = self._normalize_output_fusion_mode(output_fusion_mode)
+        if self.fusion_mode == "none" and self.fusion_levels:
+            raise ValueError("fusion_mode='none' requires fusion_levels=[]")
 
         self.spatial_dims = spatial_dims
         self.vit = MambaEncoder(self.in_chans, 
@@ -646,13 +788,35 @@ class SegMamba(nn.Module):
         self.i_out = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=2)
 
         fusion_kwargs = {"norm_name": norm_name, "residual_scale_limit": fusion_residual_scale_limit}
-        self.ui_fusion_dec3 = UIPriorFusionBlock(self.feat_size[3], **fusion_kwargs)
-        self.ui_fusion_dec2 = UIPriorFusionBlock(self.feat_size[2], **fusion_kwargs)
-        self.ui_fusion_dec1 = UIPriorFusionBlock(self.feat_size[1], **fusion_kwargs)
-        self.ui_fusion_dec0 = UIPriorFusionBlock(self.feat_size[0], **fusion_kwargs)
-        self.ui_fusion_out = UIPriorFusionBlock(self.feat_size[0], **fusion_kwargs)
+        if self.fusion_mode == "prior":
+            fusion_block = UIPriorFusionBlock
+        elif self.fusion_mode == "logit_boundary":
+            fusion_block = UILogitBoundaryFusionBlock
+        else:
+            fusion_block = None
 
-        if self.deep_supervision:
+        if fusion_block is None:
+            self.ui_fusion_dec3 = nn.Identity()
+            self.ui_fusion_dec2 = nn.Identity()
+            self.ui_fusion_dec1 = nn.Identity()
+            self.ui_fusion_dec0 = nn.Identity()
+            self.ui_fusion_out = nn.Identity()
+        else:
+            self.ui_fusion_dec3 = fusion_block(self.feat_size[3], **fusion_kwargs)
+            self.ui_fusion_dec2 = fusion_block(self.feat_size[2], **fusion_kwargs)
+            self.ui_fusion_dec1 = fusion_block(self.feat_size[1], **fusion_kwargs)
+            self.ui_fusion_dec0 = fusion_block(self.feat_size[0], **fusion_kwargs)
+            self.ui_fusion_out = fusion_block(self.feat_size[0], **fusion_kwargs)
+
+        if self.output_fusion_mode == "hierarchy_confidence":
+            self.ui_fusion_output = UIHierarchyConfidenceLogitFusion(
+                scale_limit=output_fusion_scale_limit,
+                detach_guidance=self.detach_ui_features,
+            )
+        else:
+            self.ui_fusion_output = nn.Identity()
+
+        if self.deep_supervision or self.fusion_mode == "logit_boundary":
             self.out_dec3 = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[3], out_channels=self.out_chans)
             self.out_dec2 = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[2], out_channels=self.out_chans)
             self.out_dec1 = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[1], out_channels=self.out_chans)
@@ -715,13 +879,43 @@ class SegMamba(nn.Module):
             raise ValueError(f"Unknown UIG fusion levels {sorted(unknown)}. Valid levels are {valid}.")
         return set(fusion_levels)
 
+    @staticmethod
+    def _normalize_fusion_mode(fusion_mode: str) -> str:
+        aliases = {"full": "prior", "boundary": "logit_boundary"}
+        fusion_mode = aliases.get(str(fusion_mode).lower(), str(fusion_mode).lower())
+        valid = ("prior", "logit_boundary", "none")
+        if fusion_mode not in valid:
+            raise ValueError(f"Unknown UIG fusion mode {fusion_mode!r}. Valid modes are {valid}.")
+        return fusion_mode
+
+    @staticmethod
+    def _normalize_output_fusion_mode(output_fusion_mode: str) -> str:
+        aliases = {"confidence": "hierarchy_confidence"}
+        output_fusion_mode = aliases.get(
+            str(output_fusion_mode).lower(), str(output_fusion_mode).lower()
+        )
+        valid = ("none", "hierarchy_confidence")
+        if output_fusion_mode not in valid:
+            raise ValueError(
+                f"Unknown UIG output fusion mode {output_fusion_mode!r}. Valid modes are {valid}."
+            )
+        return output_fusion_mode
+
     def _maybe_fuse(self, level: str, block: nn.Module, main_feature: torch.Tensor,
-                    union_feature: torch.Tensor, intersection_feature: torch.Tensor) -> torch.Tensor:
+                    union_feature: torch.Tensor, intersection_feature: torch.Tensor,
+                    union_logits: Optional[torch.Tensor] = None,
+                    intersection_logits: Optional[torch.Tensor] = None) -> torch.Tensor:
         if level not in self.fusion_levels:
             return main_feature
         if self.detach_ui_features:
             union_feature = union_feature.detach()
             intersection_feature = intersection_feature.detach()
+            union_logits = union_logits.detach() if union_logits is not None else None
+            intersection_logits = intersection_logits.detach() if intersection_logits is not None else None
+        if self.fusion_mode == "logit_boundary":
+            if union_logits is None or intersection_logits is None:
+                raise RuntimeError(f"logit_boundary fusion at {level} requires U/I logits.")
+            return block(main_feature, union_feature, intersection_feature, union_logits, intersection_logits)
         return block(main_feature, union_feature, intersection_feature)
 
     def forward(self, x_in):
@@ -750,23 +944,51 @@ class SegMamba(nn.Module):
         i_out_feat = self.i_decoder1(i_dec0)
         i_seg_out = self.i_out(i_out_feat)
 
+        need_dec3_logits = self.deep_supervision or (
+            self.fusion_mode == "logit_boundary" and "dec3" in self.fusion_levels
+        )
+        need_dec2_logits = self.deep_supervision or (
+            self.fusion_mode == "logit_boundary" and "dec2" in self.fusion_levels
+        )
+        need_dec1_logits = self.deep_supervision or (
+            self.fusion_mode == "logit_boundary" and "dec1" in self.fusion_levels
+        )
+        u_dec3_logits = self.u_out_dec3(u_dec3) if need_dec3_logits else None
+        i_dec3_logits = self.i_out_dec3(i_dec3) if need_dec3_logits else None
+        u_dec2_logits = self.u_out_dec2(u_dec2) if need_dec2_logits else None
+        i_dec2_logits = self.i_out_dec2(i_dec2) if need_dec2_logits else None
+        u_dec1_logits = self.u_out_dec1(u_dec1) if need_dec1_logits else None
+        i_dec1_logits = self.i_out_dec1(i_dec1) if need_dec1_logits else None
+
         dec3 = self.decoder5(enc_hidden, enc4)#384*16*16*16
-        dec3 = self._maybe_fuse("dec3", self.ui_fusion_dec3, dec3, u_dec3, i_dec3)
+        dec3 = self._maybe_fuse(
+            "dec3", self.ui_fusion_dec3, dec3, u_dec3, i_dec3, u_dec3_logits, i_dec3_logits
+        )
         dec2 = self.decoder4(dec3, enc3)#192*32*32*32
-        dec2 = self._maybe_fuse("dec2", self.ui_fusion_dec2, dec2, u_dec2, i_dec2)
+        dec2 = self._maybe_fuse(
+            "dec2", self.ui_fusion_dec2, dec2, u_dec2, i_dec2, u_dec2_logits, i_dec2_logits
+        )
         dec1 = self.decoder3(dec2, enc2)#96*64*64*64
-        dec1 = self._maybe_fuse("dec1", self.ui_fusion_dec1, dec1, u_dec1, i_dec1)
+        dec1 = self._maybe_fuse(
+            "dec1", self.ui_fusion_dec1, dec1, u_dec1, i_dec1, u_dec1_logits, i_dec1_logits
+        )
         dec0 = self.decoder2(dec1, enc1)#48*128*128*128
-        dec0 = self._maybe_fuse("dec0", self.ui_fusion_dec0, dec0, u_dec0, i_dec0)
+        dec0 = self._maybe_fuse(
+            "dec0", self.ui_fusion_dec0, dec0, u_dec0, i_dec0, u_seg_out, i_seg_out
+        )
         out = self.decoder1(dec0)
-        out = self._maybe_fuse("out", self.ui_fusion_out, out, u_out_feat, i_out_feat)
+        out = self._maybe_fuse(
+            "out", self.ui_fusion_out, out, u_out_feat, i_out_feat, u_seg_out, i_seg_out
+        )
         seg_out = self.out(out)#Class*128*128*128
+        if self.output_fusion_mode == "hierarchy_confidence":
+            seg_out = self.ui_fusion_output(seg_out, u_seg_out, i_seg_out)
 
         if self.deep_supervision:
             return {
                 "seg": [seg_out, self.out_dec1(dec1), self.out_dec2(dec2), self.out_dec3(dec3)],
-                "u": [u_seg_out, self.u_out_dec1(u_dec1), self.u_out_dec2(u_dec2), self.u_out_dec3(u_dec3)],
-                "i": [i_seg_out, self.i_out_dec1(i_dec1), self.i_out_dec2(i_dec2), self.i_out_dec3(i_dec3)],
+                "u": [u_seg_out, u_dec1_logits, u_dec2_logits, u_dec3_logits],
+                "i": [i_seg_out, i_dec1_logits, i_dec2_logits, i_dec3_logits],
             }
         elif self.training:
             return {"seg": seg_out, "u": u_seg_out, "i": i_seg_out}

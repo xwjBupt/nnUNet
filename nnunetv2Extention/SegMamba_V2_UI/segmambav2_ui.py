@@ -14,6 +14,7 @@ from typing import Optional, Sequence
 
 import torch.nn as nn
 import torch 
+import torch.nn.functional as F
 from einops import rearrange
 from monai.networks.blocks.dynunet_block import UnetOutBlock
 from monai.networks.blocks.unetr_block import UnetrBasicBlock, UnetrUpBlock
@@ -152,17 +153,26 @@ class SEBlock(nn.Module):
         return x * y
 
 class LargeKernelConv(nn.Module):
-    def __init__(self, channels):
+    def __init__(self, channels, anisotropic: bool = False):
         super().__init__()
 
+        if anisotropic:
+            large_kernel, large_padding = (1, 5, 5), (0, 2, 2)
+            kernel, padding = (1, 3, 3), (0, 1, 1)
+            dilated_padding, dilation = (0, 2, 2), (1, 2, 2)
+        else:
+            large_kernel, large_padding = 5, 2
+            kernel, padding = 3, 1
+            dilated_padding, dilation = 2, 2
+
         self.deep_path = nn.Sequential(
-            ConvBlock(channels, channels, 5, padding=2),
-            ConvBlock(channels, channels, 3, padding=1),
-            ConvBlock(channels, channels, 3, padding=2, dilation=2),
+            ConvBlock(channels, channels, large_kernel, padding=large_padding),
+            ConvBlock(channels, channels, kernel, padding=padding),
+            ConvBlock(channels, channels, kernel, padding=dilated_padding, dilation=dilation),
         )
 
         self.shortcut_path = nn.Sequential(
-            ConvBlock(channels, channels, 3, padding=1),
+            ConvBlock(channels, channels, kernel, padding=padding),
             ConvBlock(channels, channels, 1, padding=0)
         )
 
@@ -174,17 +184,43 @@ class LargeKernelConv(nn.Module):
 
 class MambaEncoder(nn.Module):
     def __init__(self, in_chans=1, depths=[2, 2, 2, 2], dims=[48, 96, 192, 384],
-                 drop_path_rate=0., layer_scale_init_value=1e-6, out_indices=[0, 1, 2, 3]):
+                 drop_path_rate=0., layer_scale_init_value=1e-6, out_indices=[0, 1, 2, 3],
+                 strides: Sequence[Sequence[int]] = ((2, 2, 2),) * 4,
+                 downsample_kernel_sizes: Optional[Sequence[Sequence[int]]] = None,
+                 anisotropic_gsc_stages: Sequence[int] = ()):
         super().__init__()
 
+        strides = [tuple(int(v) for v in stride) for stride in strides]
+        if len(strides) != 4 or any(len(stride) != 3 for stride in strides):
+            raise ValueError(f"MambaEncoder requires four 3D strides, got {strides}.")
+        if downsample_kernel_sizes is None:
+            downsample_kernel_sizes = [
+                (1, 3, 3) if stride[0] == 1 else (3, 3, 3) for stride in strides
+            ]
+        downsample_kernel_sizes = [tuple(int(v) for v in kernel) for kernel in downsample_kernel_sizes]
+        if len(downsample_kernel_sizes) != 4 or any(len(kernel) != 3 for kernel in downsample_kernel_sizes):
+            raise ValueError(
+                "MambaEncoder requires four 3D downsample kernels, got "
+                f"{downsample_kernel_sizes}."
+            )
+        anisotropic_gsc_stages = set(int(v) for v in anisotropic_gsc_stages)
+
         self.downsample_layers = nn.ModuleList() # stem and 3 intermediate downsampling conv layers
+        kernel = downsample_kernel_sizes[0]
         stem = nn.Sequential(
-              nn.Conv3d(dims[0], dims[0], kernel_size=3, stride=2, padding=1),
+              nn.Conv3d(
+                  dims[0], dims[0], kernel_size=kernel, stride=strides[0],
+                  padding=tuple(v // 2 for v in kernel),
+              ),
               )
         self.downsample_layers.append(stem)
         for i in range(3):
+            kernel = downsample_kernel_sizes[i + 1]
             downsample_layer = nn.Sequential(
-                nn.Conv3d(dims[i], dims[i+1], kernel_size=3, stride=2, padding=1),
+                nn.Conv3d(
+                    dims[i], dims[i+1], kernel_size=kernel, stride=strides[i + 1],
+                    padding=tuple(v // 2 for v in kernel),
+                ),
             )
             self.downsample_layers.append(downsample_layer)
 
@@ -194,13 +230,19 @@ class MambaEncoder(nn.Module):
         for i in range(4):
             if i < 2:
                 gsc = nn.Sequential(
-                    *[LargeKernelConv(dims[i]) for j in range(depths[i])]
+                    *[
+                        LargeKernelConv(dims[i], anisotropic=i in anisotropic_gsc_stages)
+                        for j in range(depths[i])
+                    ]
                 )  
                 stage = None
                 
             else :
                 gsc = nn.Sequential(
-                    *[LargeKernelConv(dims[i]) for j in range(depths[i])]
+                    *[
+                        LargeKernelConv(dims[i], anisotropic=i in anisotropic_gsc_stages)
+                        for j in range(depths[i])
+                    ]
                 )
                 stage = nn.Sequential(
                     *[MambaLayer(dim=dims[i]) for j in range(depths[i])]
@@ -241,6 +283,56 @@ class MambaEncoder(nn.Module):
         x = self.forward_features(x)
         return x
 
+
+class AnisotropicSemanticDifferenceModule(nn.Module):
+    """Enhance an encoder skip with semantically gated in-plane differences."""
+
+    def __init__(
+        self,
+        skip_channels: int,
+        semantic_channels: int,
+        norm_name: str = "instance",
+        residual_scale_limit: float = 0.1,
+    ) -> None:
+        super().__init__()
+        if residual_scale_limit <= 0:
+            raise ValueError(f"residual_scale_limit must be positive, got {residual_scale_limit}.")
+        norm = nn.InstanceNorm3d if norm_name == "instance" else nn.BatchNorm3d
+        self.residual_scale_limit = float(residual_scale_limit)
+        self.semantic_projection = nn.Conv3d(semantic_channels, skip_channels, kernel_size=1, bias=False)
+        self.semantic_gate = nn.Sequential(
+            nn.Conv3d(skip_channels, skip_channels, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+        )
+        self.boundary_refine = nn.Sequential(
+            nn.Conv3d(
+                skip_channels, skip_channels, kernel_size=(1, 3, 3),
+                padding=(0, 1, 1), groups=skip_channels, bias=False,
+            ),
+            norm(skip_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(skip_channels, skip_channels, kernel_size=1, bias=False),
+            norm(skip_channels),
+        )
+        self.residual_scale = nn.Parameter(torch.zeros(1))
+
+    @staticmethod
+    def _xy_difference(feature: torch.Tensor) -> torch.Tensor:
+        dx = F.pad(feature[..., 1:] - feature[..., :-1], (0, 1, 0, 0, 0, 0))
+        dy = F.pad(feature[..., 1:, :] - feature[..., :-1, :], (0, 0, 0, 1, 0, 0))
+        return torch.abs(dx) + torch.abs(dy)
+
+    def forward(self, skip_feature: torch.Tensor, semantic_feature: torch.Tensor) -> torch.Tensor:
+        semantic_feature = self.semantic_projection(semantic_feature)
+        if semantic_feature.shape[2:] != skip_feature.shape[2:]:
+            semantic_feature = F.interpolate(
+                semantic_feature, size=skip_feature.shape[2:], mode="trilinear", align_corners=False
+            )
+        semantic_guidance = self.semantic_gate(self._xy_difference(semantic_feature))
+        boundary_residual = self.boundary_refine(self._xy_difference(skip_feature) * semantic_guidance)
+        scale = self.residual_scale_limit * torch.tanh(self.residual_scale)
+        return skip_feature + scale * boundary_residual
+
 class SegMamba(nn.Module):
     """Three-branch SegMamba wrapper compatible with nnU-Net v2.
 
@@ -267,6 +359,12 @@ class SegMamba(nn.Module):
         in_chans: Optional[int] = None,
         out_chans: Optional[int] = None,
         pretrained_path: Optional[str] = None,
+        strides: Sequence[Sequence[int]] = ((2, 2, 2),) * 4,
+        encoder_kernel_sizes: Sequence[Sequence[int]] = (
+            (3, 3, 3), (3, 3, 3), (3, 3, 3), (3, 3, 3), (3, 3, 3)
+        ),
+        sdm_level: Optional[str] = None,
+        sdm_residual_scale_limit: float = 0.1,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -291,6 +389,22 @@ class SegMamba(nn.Module):
         self.feat_size = tuple(feat_size)
         self.layer_scale_init_value = layer_scale_init_value
         self.deep_supervision = deep_supervision
+        self.strides = tuple(tuple(int(v) for v in stride) for stride in strides)
+        self.encoder_kernel_sizes = tuple(
+            tuple(int(v) for v in kernel) for kernel in encoder_kernel_sizes
+        )
+        if len(self.strides) != 4 or any(len(stride) != 3 for stride in self.strides):
+            raise ValueError(f"SegMamba requires four 3D strides, got {self.strides}.")
+        if len(self.encoder_kernel_sizes) != 5 or any(
+            len(kernel) != 3 for kernel in self.encoder_kernel_sizes
+        ):
+            raise ValueError(
+                "SegMamba requires five 3D encoder kernels, got "
+                f"{self.encoder_kernel_sizes}."
+            )
+        if sdm_level not in (None, "dec1"):
+            raise ValueError(f"Only sdm_level=None or 'dec1' is supported, got {sdm_level!r}.")
+        self.sdm_level = sdm_level
 
         self.spatial_dims = spatial_dims
         self.vit = MambaEncoder(self.in_chans, 
@@ -298,12 +412,18 @@ class SegMamba(nn.Module):
                                 dims=self.feat_size,
                                 drop_path_rate=drop_path_rate,
                                 layer_scale_init_value=layer_scale_init_value,
+                                strides=self.strides,
+                                anisotropic_gsc_stages=tuple(
+                                    index
+                                    for index in range(2)
+                                    if self.encoder_kernel_sizes[index + 1][0] == 1
+                                ),
                               )
         self.encoder1 = UnetrBasicBlock(
             spatial_dims=spatial_dims,
             in_channels=self.in_chans,
             out_channels=self.feat_size[0],
-            kernel_size=3,
+            kernel_size=self.encoder_kernel_sizes[0],
             stride=1,
             norm_name=norm_name,
             res_block=res_block,
@@ -312,7 +432,7 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[0],
             out_channels=self.feat_size[1],
-            kernel_size=3,
+            kernel_size=self.encoder_kernel_sizes[1],
             stride=1,
             norm_name=norm_name,
             res_block=res_block,
@@ -321,7 +441,7 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[1],
             out_channels=self.feat_size[2],
-            kernel_size=3,
+            kernel_size=self.encoder_kernel_sizes[2],
             stride=1,
             norm_name=norm_name,
             res_block=res_block,
@@ -330,7 +450,7 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[2],
             out_channels=self.feat_size[3],
-            kernel_size=3,
+            kernel_size=self.encoder_kernel_sizes[3],
             stride=1,
             norm_name=norm_name,
             res_block=res_block,
@@ -340,7 +460,7 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[3],
             out_channels=self.hidden_size,
-            kernel_size=3,
+            kernel_size=self.encoder_kernel_sizes[4],
             stride=1,
             norm_name=norm_name,
             res_block=res_block,
@@ -350,8 +470,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.hidden_size,
             out_channels=self.feat_size[3],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[3],
+            upsample_kernel_size=self.strides[3],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -359,8 +479,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[3],
             out_channels=self.feat_size[2],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[2],
+            upsample_kernel_size=self.strides[2],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -368,8 +488,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[2],
             out_channels=self.feat_size[1],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[1],
+            upsample_kernel_size=self.strides[1],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -377,8 +497,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[1],
             out_channels=self.feat_size[0],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[0],
+            upsample_kernel_size=self.strides[0],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -386,7 +506,7 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[0],
             out_channels=self.feat_size[0],
-            kernel_size=3,
+            kernel_size=self.encoder_kernel_sizes[0],
             stride=1,
             norm_name=norm_name,
             res_block=res_block,
@@ -397,8 +517,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.hidden_size,
             out_channels=self.feat_size[3],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[3],
+            upsample_kernel_size=self.strides[3],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -406,8 +526,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[3],
             out_channels=self.feat_size[2],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[2],
+            upsample_kernel_size=self.strides[2],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -415,8 +535,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[2],
             out_channels=self.feat_size[1],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[1],
+            upsample_kernel_size=self.strides[1],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -424,8 +544,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[1],
             out_channels=self.feat_size[0],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[0],
+            upsample_kernel_size=self.strides[0],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -433,7 +553,7 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[0],
             out_channels=self.feat_size[0],
-            kernel_size=3,
+            kernel_size=self.encoder_kernel_sizes[0],
             stride=1,
             norm_name=norm_name,
             res_block=res_block,
@@ -444,8 +564,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.hidden_size,
             out_channels=self.feat_size[3],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[3],
+            upsample_kernel_size=self.strides[3],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -453,8 +573,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[3],
             out_channels=self.feat_size[2],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[2],
+            upsample_kernel_size=self.strides[2],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -462,8 +582,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[2],
             out_channels=self.feat_size[1],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[1],
+            upsample_kernel_size=self.strides[1],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -471,8 +591,8 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[1],
             out_channels=self.feat_size[0],
-            kernel_size=3,
-            upsample_kernel_size=2,
+            kernel_size=self.encoder_kernel_sizes[0],
+            upsample_kernel_size=self.strides[0],
             norm_name=norm_name,
             res_block=res_block,
         )
@@ -480,12 +600,23 @@ class SegMamba(nn.Module):
             spatial_dims=spatial_dims,
             in_channels=self.feat_size[0],
             out_channels=self.feat_size[0],
-            kernel_size=3,
+            kernel_size=self.encoder_kernel_sizes[0],
             stride=1,
             norm_name=norm_name,
             res_block=res_block,
         )
         self.i_out = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=2)
+
+        self.sdm_skip_dec1 = (
+            AnisotropicSemanticDifferenceModule(
+                skip_channels=self.feat_size[1],
+                semantic_channels=self.feat_size[2],
+                norm_name=norm_name,
+                residual_scale_limit=sdm_residual_scale_limit,
+            )
+            if self.sdm_level == "dec1"
+            else None
+        )
 
         if self.deep_supervision:
             self.out_dec3 = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[3], out_channels=self.out_chans)
@@ -523,9 +654,12 @@ class SegMamba(nn.Module):
                 # 去掉 module 前缀
                 new_k = k.replace("module.", "")
 
-                # 如果 key 在模型里并且 shape 匹配
-                if new_k in model_dict and model_dict[new_k].shape == v.shape:
-                    filtered_dict[new_k] = v
+                if new_k in model_dict:
+                    adapted = self._adapt_pretrained_tensor(v, model_dict[new_k])
+                else:
+                    adapted = None
+                if adapted is not None:
+                    filtered_dict[new_k] = adapted
                 else:
                     print(f"[SegMamba] Skip {k}: checkpoint {tuple(v.shape)} != model {tuple(model_dict.get(new_k, v).shape)}")
 
@@ -566,7 +700,8 @@ class SegMamba(nn.Module):
 
         dec3 = self.decoder5(enc_hidden, enc4)#384*16*16*16
         dec2 = self.decoder4(dec3, enc3)#192*32*32*32
-        dec1 = self.decoder3(dec2, enc2)#96*64*64*64
+        main_enc2 = self.sdm_skip_dec1(enc2, dec2) if self.sdm_skip_dec1 is not None else enc2
+        dec1 = self.decoder3(dec2, main_enc2)#96*64*64*64
         dec0 = self.decoder2(dec1, enc1)#48*128*128*128
         out = self.decoder1(dec0)
         seg_out = self.out(out)#Class*128*128*128
@@ -623,6 +758,32 @@ class SegMamba(nn.Module):
         copied += len(out_state)
         print(f"[SegMambaUI] Initialized auxiliary U/I branches from main branch: {copied} tensors copied.")
 
+    @staticmethod
+    def _adapt_pretrained_tensor(value: torch.Tensor, target: torch.Tensor):
+        value = value.detach()
+        if value.shape == target.shape:
+            return value
+        if value.ndim == target.ndim == 5:
+            if value.shape[1] != target.shape[1]:
+                if target.shape[1] == 1:
+                    value = value.mean(dim=1, keepdim=True)
+                else:
+                    return None
+            for axis in (2, 3, 4):
+                if value.shape[axis] == target.shape[axis]:
+                    continue
+                if target.shape[axis] == 1:
+                    value = value.mean(dim=axis, keepdim=True)
+                else:
+                    return None
+        if (
+            value.ndim == target.ndim
+            and value.shape[0] >= target.shape[0]
+            and value.shape[1:] == target.shape[1:]
+        ):
+            value = value[:target.shape[0]]
+        return value if value.shape == target.shape else None
+
     def load_from(self, pretrained_path):
             if pretrained_path is not None:
                 print(f"[SegMamba 手术式加载] 正在从 {pretrained_path} 载入并改造预训练权重...")
@@ -642,28 +803,9 @@ class SegMamba(nn.Module):
                     key = k[7:] if k.startswith("module.") else k
                     
                     if key in model_dict:
-                        # 💥 核心手术 1: 修复输入层通道不匹配 (Checkpoint 为 4，Model 为 1)
-                        if key == "encoder1.layer.conv1.conv.weight" and v.shape != model_dict[key].shape:
-                            print(f" -> 改造输入层通道: {v.shape} -> {model_dict[key].shape}")
-                            # 截取第一通道，或者取 4 个通道的平均值均可，这里采用取平均
-                            v = v_modified = torch.mean(v, dim=1, keepdim=True)
-                            
-                        if key == "encoder1.layer.conv3.conv.weight" and v.shape != model_dict[key].shape:
-                            print(f" -> 改造输入辅助层通道: {v.shape} -> {model_dict[key].shape}")
-                            v = torch.mean(v, dim=1, keepdim=True)
-
-                        # 💥 核心手术 2: 修复输出层类别数不匹配 (Checkpoint 为 4，Model 为 2)
-                        if key == "out.conv.conv.weight" and v.shape != model_dict[key].shape:
-                            print(f" -> 截取输出层类别权重: {v.shape} -> {model_dict[key].shape}")
-                            v = v[:model_dict[key].shape[0], ...] # 截取前 2 个分类
-                            
-                        if key == "out.conv.conv.bias" and v.shape != model_dict[key].shape:
-                            print(f" -> 截取输出层偏置: {v.shape} -> {model_dict[key].shape}")
-                            v = v[:model_dict[key].shape[0]]
-
-                        # 检查形状是否完美对齐
-                        if v.shape == model_dict[key].shape:
-                            expected_dict[key] = v
+                        adapted = self._adapt_pretrained_tensor(v, model_dict[key])
+                        if adapted is not None:
+                            expected_dict[key] = adapted
                         else:
                             print(f" -> 警告: 形状依然不匹配，跳过 {key} {v.shape} vs {model_dict[key].shape}")
 

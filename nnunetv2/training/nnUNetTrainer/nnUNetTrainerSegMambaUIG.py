@@ -200,6 +200,110 @@ class nnUNetTrainerSegMambaUIGStableHierarchy(nnUNetTrainerSegMambaUIGStable):
             )
 
 
+class nnUNetTrainerSegMambaUIGStableHierarchyConservative(
+    nnUNetTrainerSegMambaUIGStableHierarchy
+):
+    """Use detached, margin-aware and asymmetric Seg/U/I containment.
+
+    The intersection branch remains a strong lower-bound cue for missed
+    hemorrhage. The union branch is a weaker upper-bound cue because an
+    underestimated union can otherwise suppress true-positive segmentation.
+    """
+
+    default_hierarchy_margin = 0.05
+    default_hierarchy_lower_weight = 1.0
+    default_hierarchy_upper_weight = 0.25
+    default_hierarchy_order_weight = 0.25
+
+    def initialize(self):
+        self.hierarchy_margin = self.default_hierarchy_margin
+        self.hierarchy_lower_weight = self.default_hierarchy_lower_weight
+        self.hierarchy_upper_weight = self.default_hierarchy_upper_weight
+        self.hierarchy_order_weight = self.default_hierarchy_order_weight
+        super().initialize()
+        self.logger.update_config(
+            {
+                "hierarchy_guidance_detached": True,
+                "hierarchy_margin": self.hierarchy_margin,
+                "hierarchy_lower_weight": self.hierarchy_lower_weight,
+                "hierarchy_upper_weight": self.hierarchy_upper_weight,
+                "hierarchy_order_weight": self.hierarchy_order_weight,
+            }
+        )
+        self.print_to_log_file(
+            "Conservative hierarchy: "
+            f"weight={self.hierarchy_loss_weight}, margin={self.hierarchy_margin}, "
+            f"lower/upper/order={self.hierarchy_lower_weight}/"
+            f"{self.hierarchy_upper_weight}/{self.hierarchy_order_weight}, "
+            "U/I guidance detached from the main containment term."
+        )
+
+    def _compute_additional_branch_loss(self, seg_output, u_output, i_output):
+        if u_output is None or i_output is None:
+            return nnUNetTrainerSegMambaUIGStable._compute_additional_branch_loss(
+                self, seg_output, u_output, i_output
+            )
+
+        seg_outputs = self._as_list(seg_output)
+        union_outputs = self._as_list(u_output)
+        intersection_outputs = self._as_list(i_output)
+        if not (len(seg_outputs) == len(union_outputs) == len(intersection_outputs)):
+            raise RuntimeError(
+                "Conservative hierarchy loss requires matching Seg/U/I outputs, got "
+                f"{len(seg_outputs)}/{len(union_outputs)}/{len(intersection_outputs)}."
+            )
+
+        weights = np.array(
+            [1 / (2 ** index) for index in range(len(seg_outputs))], dtype=np.float32
+        )
+        if len(weights) > 1:
+            weights[-1] = 1e-6 if self.is_ddp else 0.0
+        weights /= weights.sum()
+
+        hierarchy_loss = seg_outputs[0].new_zeros((), dtype=torch.float32)
+        for weight, seg_logits, union_logits, intersection_logits in zip(
+            weights, seg_outputs, union_outputs, intersection_outputs
+        ):
+            if weight == 0:
+                continue
+
+            seg_probability = self._foreground_probability(seg_logits)
+            union_probability = self._foreground_probability(union_logits)
+            intersection_probability = self._foreground_probability(intersection_logits)
+
+            # U/I supervise their own targets. For main-branch containment they
+            # are fixed guidance, so the loss cannot be reduced by moving U/I
+            # toward an erroneous main prediction.
+            union_guidance = union_probability.detach()
+            intersection_guidance = intersection_probability.detach()
+            margin = float(self.hierarchy_margin)
+
+            lower_violation = F.relu(
+                intersection_guidance - seg_probability - margin
+            )
+            upper_violation = F.relu(
+                seg_probability - union_guidance - margin
+            )
+            order_violation = F.relu(
+                intersection_probability - union_probability - margin
+            )
+            violation = (
+                self.hierarchy_lower_weight * lower_violation
+                + self.hierarchy_upper_weight * upper_violation
+                + self.hierarchy_order_weight * order_violation
+            )
+
+            relevance = torch.maximum(
+                torch.maximum(seg_probability, union_guidance), intersection_guidance
+            ).detach()
+            normalized_violation = (
+                (violation * relevance).sum() / relevance.sum().clamp_min(1e-6)
+            )
+            hierarchy_loss = hierarchy_loss + float(weight) * normalized_violation
+
+        return self.hierarchy_loss_weight * hierarchy_loss
+
+
 class nnUNetTrainerSegMambaUIGStableOffset(nnUNetTrainerSegMambaUIGStable):
     """Build U/I targets from three D-axis slices separated by a fixed offset."""
 

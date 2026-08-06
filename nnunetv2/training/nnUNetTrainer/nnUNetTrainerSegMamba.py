@@ -28,6 +28,12 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
     """
 
     def initialize(self):
+        # Keep all model/optimizer state in strict FP32. cuDNN enables TF32 by
+        # default on recent NVIDIA GPUs, so both TF32 switches must be disabled.
+        torch.set_float32_matmul_precision("highest")
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
         ### 🚀 核心参数自定义配置区（可在此自由修改） 🚀 ###
         # 1. 目标学习率 (nnU-Net 默认是 0.01)
         self.initial_lr = 3e-3  
@@ -59,9 +65,26 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
 
             self.optimizer, self.lr_scheduler = self.configure_optimizers()
 
+            if self._do_i_compile():
+                self.print_to_log_file(
+                    "Using torch.compile for SegMamba "
+                    "(mode=default, dynamic=False)."
+                )
+                self.network = torch.compile(
+                    self.network,
+                    mode="default",
+                    dynamic=False,
+                )
+
             if self.is_ddp:
                 self.network = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.network)
-                self.network = DDP(self.network, device_ids=[self.local_rank], find_unused_parameters=True)
+                self.network = DDP(
+                    self.network,
+                    device_ids=[self.local_rank],
+                    find_unused_parameters=False,
+                    static_graph=True,
+                    gradient_as_bucket_view=True,
+                )
 
             self.loss = self._build_loss()
             from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
@@ -75,7 +98,13 @@ class nnUNetTrainerSegMamba(nnUNetTrainer):
                 "num_iterations_per_epoch": self.num_iterations_per_epoch,
                 "num_val_iterations_per_epoch": self.num_val_iterations_per_epoch,
                 "num_epochs": self.num_epochs, "enable_deep_supervision": self.enable_deep_supervision,
-                "batch_size": self.configuration_manager.batch_size
+                "batch_size": self.configuration_manager.batch_size,
+                "torch_compile": self._do_i_compile(),
+                "torch_compile_mode": "default" if self._do_i_compile() else None,
+                "ddp_static_graph": self.is_ddp,
+                "ddp_gradient_as_bucket_view": self.is_ddp,
+                "tf32_matmul_enabled": torch.backends.cuda.matmul.allow_tf32,
+                "tf32_cudnn_enabled": torch.backends.cudnn.allow_tf32,
             }
             self.logger.update_config({"hparas": logger_config_hparas})
         else:

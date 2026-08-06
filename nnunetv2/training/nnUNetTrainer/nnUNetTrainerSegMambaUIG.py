@@ -132,9 +132,13 @@ class nnUNetTrainerSegMambaUIGStableHierarchy(nnUNetTrainerSegMambaUIGStable):
             return torch.sigmoid(logits)
         return torch.softmax(logits, dim=1)[:, 1:].sum(dim=1, keepdim=True)
 
-    def _compute_additional_branch_loss(self, seg_output, u_output, i_output):
+    def _compute_additional_branch_loss(
+        self, seg_output, u_output, i_output, u_target=None, i_target=None
+    ):
         if u_output is None or i_output is None:
-            return super()._compute_additional_branch_loss(seg_output, u_output, i_output)
+            return super()._compute_additional_branch_loss(
+                seg_output, u_output, i_output, u_target=u_target, i_target=i_target
+            )
 
         seg_outputs = self._as_list(seg_output)
         union_outputs = self._as_list(u_output)
@@ -238,10 +242,17 @@ class nnUNetTrainerSegMambaUIGStableHierarchyConservative(
             "U/I guidance detached from the main containment term."
         )
 
-    def _compute_additional_branch_loss(self, seg_output, u_output, i_output):
+    def _compute_additional_branch_loss(
+        self, seg_output, u_output, i_output, u_target=None, i_target=None
+    ):
         if u_output is None or i_output is None:
             return nnUNetTrainerSegMambaUIGStable._compute_additional_branch_loss(
-                self, seg_output, u_output, i_output
+                self,
+                seg_output,
+                u_output,
+                i_output,
+                u_target=u_target,
+                i_target=i_target,
             )
 
         seg_outputs = self._as_list(seg_output)
@@ -295,6 +306,127 @@ class nnUNetTrainerSegMambaUIGStableHierarchyConservative(
 
             relevance = torch.maximum(
                 torch.maximum(seg_probability, union_guidance), intersection_guidance
+            ).detach()
+            normalized_violation = (
+                (violation * relevance).sum() / relevance.sum().clamp_min(1e-6)
+            )
+            hierarchy_loss = hierarchy_loss + float(weight) * normalized_violation
+
+        return self.hierarchy_loss_weight * hierarchy_loss
+
+
+class nnUNetTrainerSegMambaUIGStableHierarchyHighResReliable(
+    nnUNetTrainerSegMambaUIGStableHierarchy
+):
+    """Apply target-reliability-weighted hierarchy at the two finest scales."""
+
+    default_hierarchy_reliability_floor = 0.5
+    default_hierarchy_active_scales = 2
+
+    def initialize(self):
+        self.hierarchy_reliability_floor = self.default_hierarchy_reliability_floor
+        self.hierarchy_active_scales = self.default_hierarchy_active_scales
+        super().initialize()
+        self.logger.update_config(
+            {
+                "hierarchy_variant": "highres_target_reliable",
+                "hierarchy_active_scales": self.hierarchy_active_scales,
+                "hierarchy_scale_weights": [2.0 / 3.0, 1.0 / 3.0, 0.0, 0.0],
+                "hierarchy_reliability_floor": self.hierarchy_reliability_floor,
+                "hierarchy_margin": 0.0,
+                "hierarchy_guidance_detached": False,
+                "hierarchy_lower_weight": 1.0,
+                "hierarchy_upper_weight": 1.0,
+                "hierarchy_order_weight": 0.5,
+            }
+        )
+        self.print_to_log_file(
+            "HighRes Target-Reliable hierarchy: "
+            f"weight={self.hierarchy_loss_weight}, active_scales="
+            f"{self.hierarchy_active_scales}, reliability_floor="
+            f"{self.hierarchy_reliability_floor}, margin=0, "
+            "lower/upper/order=1/1/0.5."
+        )
+
+    def _compute_additional_branch_loss(
+        self, seg_output, u_output, i_output, u_target=None, i_target=None
+    ):
+        if u_output is None or i_output is None:
+            return nnUNetTrainerSegMambaUIGStable._compute_additional_branch_loss(
+                self,
+                seg_output,
+                u_output,
+                i_output,
+                u_target=u_target,
+                i_target=i_target,
+            )
+        if u_target is None or i_target is None:
+            raise RuntimeError(
+                "HighRes Target-Reliable hierarchy requires U/I supervision targets."
+            )
+
+        seg_outputs = self._as_list(seg_output)
+        union_outputs = self._as_list(u_output)
+        intersection_outputs = self._as_list(i_output)
+        union_targets = self._as_list(u_target)
+        intersection_targets = self._as_list(i_target)
+        output_counts = {
+            len(seg_outputs),
+            len(union_outputs),
+            len(intersection_outputs),
+            len(union_targets),
+            len(intersection_targets),
+        }
+        if len(output_counts) != 1:
+            raise RuntimeError(
+                "HighRes Target-Reliable hierarchy requires matching Seg/U/I outputs "
+                "and targets, got "
+                f"{len(seg_outputs)}/{len(union_outputs)}/{len(intersection_outputs)}/"
+                f"{len(union_targets)}/{len(intersection_targets)}."
+            )
+
+        weights = np.zeros(len(seg_outputs), dtype=np.float32)
+        active_scales = min(self.hierarchy_active_scales, len(weights))
+        weights[:active_scales] = np.asarray(
+            [1 / (2 ** index) for index in range(active_scales)], dtype=np.float32
+        )
+        weights /= weights.sum()
+
+        hierarchy_loss = seg_outputs[0].new_zeros((), dtype=torch.float32)
+        reliability_floor = float(self.hierarchy_reliability_floor)
+        reliability_range = 1.0 - reliability_floor
+        for weight, seg_logits, union_logits, intersection_logits, union_label, intersection_label in zip(
+            weights,
+            seg_outputs,
+            union_outputs,
+            intersection_outputs,
+            union_targets,
+            intersection_targets,
+        ):
+            if weight == 0:
+                continue
+
+            seg_probability = self._foreground_probability(seg_logits)
+            union_probability = self._foreground_probability(union_logits)
+            intersection_probability = self._foreground_probability(intersection_logits)
+            union_label = (union_label > 0).float()
+            intersection_label = (intersection_label > 0).float()
+
+            union_reliability = reliability_floor + reliability_range * (
+                1.0 - torch.abs(union_probability.detach() - union_label)
+            )
+            intersection_reliability = reliability_floor + reliability_range * (
+                1.0 - torch.abs(intersection_probability.detach() - intersection_label)
+            )
+
+            violation = (
+                intersection_reliability
+                * F.relu(intersection_probability - seg_probability)
+                + union_reliability * F.relu(seg_probability - union_probability)
+                + 0.5 * F.relu(intersection_probability - union_probability)
+            )
+            relevance = torch.maximum(
+                torch.maximum(seg_probability, union_probability), intersection_probability
             ).detach()
             normalized_violation = (
                 (violation * relevance).sum() / relevance.sum().clamp_min(1e-6)

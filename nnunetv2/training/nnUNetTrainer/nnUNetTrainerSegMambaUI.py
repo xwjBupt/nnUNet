@@ -87,12 +87,6 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
     default_auxiliary_lr_multiplier = 3.0
 
     def initialize(self):
-        # Keep all model/optimizer state in strict FP32. cuDNN enables TF32 by
-        # default on recent NVIDIA GPUs, so both TF32 switches must be disabled.
-        torch.set_float32_matmul_precision("highest")
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
-
         ### 🚀 核心参数自定义配置区（可在此自由修改） 🚀 ###
         # 1. 目标学习率 (nnU-Net 默认是 0.01)
         self.initial_lr = 3e-3  
@@ -133,26 +127,9 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
 
             self.optimizer, self.lr_scheduler = self.configure_optimizers()
 
-            if self._do_i_compile():
-                self.print_to_log_file(
-                    "Using torch.compile for SegMamba UI/UIG "
-                    "(mode=default, dynamic=False)."
-                )
-                self.network = torch.compile(
-                    self.network,
-                    mode="default",
-                    dynamic=False,
-                )
-
             if self.is_ddp:
                 self.network = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.network)
-                self.network = DDP(
-                    self.network,
-                    device_ids=[self.local_rank],
-                    find_unused_parameters=False,
-                    static_graph=True,
-                    gradient_as_bucket_view=True,
-                )
+                self.network = DDP(self.network, device_ids=[self.local_rank], find_unused_parameters=True)
 
             self.loss = self._build_loss()
             self.ui_loss = self._build_binary_aux_loss()
@@ -175,12 +152,6 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
                 "lr_restart_t0": self.lr_restart_t0,
                 "lr_restart_t_mult": self.lr_restart_t_mult,
                 "lr_min": self.lr_min,
-                "torch_compile": self._do_i_compile(),
-                "torch_compile_mode": "default" if self._do_i_compile() else None,
-                "ddp_static_graph": self.is_ddp,
-                "ddp_gradient_as_bucket_view": self.is_ddp,
-                "tf32_matmul_enabled": torch.backends.cuda.matmul.allow_tf32,
-                "tf32_cudnn_enabled": torch.backends.cudnn.allow_tf32,
             }
             self.logger.update_config({"hparas": logger_config_hparas})
             self._ensure_aux_logger_keys()
@@ -312,7 +283,9 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
             return output.get("seg"), output.get("u"), output.get("i")
         return output, None, None
 
-    def _compute_additional_branch_loss(self, seg_output, u_output, i_output):
+    def _compute_additional_branch_loss(
+        self, seg_output, u_output, i_output, u_target=None, i_target=None
+    ):
         reference = self._first_output(seg_output)
         return reference.new_zeros(())
 
@@ -378,7 +351,9 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
         loss_seg = self.loss(seg_output, target)
         loss_u = self.ui_loss(u_output, u_target) if u_output is not None else loss_seg.new_tensor(0.0)
         loss_i = self.ui_loss(i_output, i_target) if i_output is not None else loss_seg.new_tensor(0.0)
-        loss_additional = self._compute_additional_branch_loss(seg_output, u_output, i_output)
+        loss_additional = self._compute_additional_branch_loss(
+            seg_output, u_output, i_output, u_target=u_target, i_target=i_target
+        )
         l = (
             loss_seg
             + self.union_loss_weight * loss_u
@@ -421,7 +396,9 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
         del data
         seg_output, u_output, i_output = self._split_network_output(output)
         u_target, i_target = self._make_union_intersection_targets(target)
-        loss_additional = self._compute_additional_branch_loss(seg_output, u_output, i_output)
+        loss_additional = self._compute_additional_branch_loss(
+            seg_output, u_output, i_output, u_target=u_target, i_target=i_target
+        )
 
         if self.enable_deep_supervision and isinstance(seg_output, (list, tuple)):
             loss_seg = self.loss(seg_output, target)

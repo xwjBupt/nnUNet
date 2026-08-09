@@ -436,6 +436,142 @@ class nnUNetTrainerSegMambaUIGStableHierarchyHighResReliable(
         return self.hierarchy_loss_weight * hierarchy_loss
 
 
+class nnUNetTrainerSegMambaUIGStableHierarchyFusionAlignedReliable(
+    nnUNetTrainerSegMambaUIGStableHierarchyHighResReliable
+):
+    """Keep reliable high-resolution constraints and anchor the dec2 fusion scale."""
+
+    default_hierarchy_active_scales = 3
+    default_hierarchy_reliable_scales = 2
+
+    def initialize(self):
+        self.hierarchy_reliable_scales = self.default_hierarchy_reliable_scales
+        super().initialize()
+        self.logger.update_config(
+            {
+                "hierarchy_variant": "fusion_aligned_reliable",
+                "hierarchy_active_scales": self.hierarchy_active_scales,
+                "hierarchy_reliable_scales": self.hierarchy_reliable_scales,
+                "hierarchy_scale_weights": [4.0 / 7.0, 2.0 / 7.0, 1.0 / 7.0, 0.0],
+                "hierarchy_fusion_anchor_scale": "dec2",
+                "hierarchy_fusion_anchor_reliability_weighted": False,
+            }
+        )
+        self.print_to_log_file(
+            "Fusion-Aligned Reliable hierarchy: "
+            f"weight={self.hierarchy_loss_weight}, active_scales="
+            f"{self.hierarchy_active_scales}, reliable_scales="
+            f"{self.hierarchy_reliable_scales}, weights=4/7,2/7,1/7,0; "
+            "dec2 uses the original unattenuated hierarchy constraint."
+        )
+
+    def _compute_additional_branch_loss(
+        self, seg_output, u_output, i_output, u_target=None, i_target=None
+    ):
+        if u_output is None or i_output is None:
+            return nnUNetTrainerSegMambaUIGStable._compute_additional_branch_loss(
+                self,
+                seg_output,
+                u_output,
+                i_output,
+                u_target=u_target,
+                i_target=i_target,
+            )
+        if u_target is None or i_target is None:
+            raise RuntimeError(
+                "Fusion-Aligned Reliable hierarchy requires U/I supervision targets."
+            )
+
+        seg_outputs = self._as_list(seg_output)
+        union_outputs = self._as_list(u_output)
+        intersection_outputs = self._as_list(i_output)
+        union_targets = self._as_list(u_target)
+        intersection_targets = self._as_list(i_target)
+        output_counts = {
+            len(seg_outputs),
+            len(union_outputs),
+            len(intersection_outputs),
+            len(union_targets),
+            len(intersection_targets),
+        }
+        if len(output_counts) != 1:
+            raise RuntimeError(
+                "Fusion-Aligned Reliable hierarchy requires matching Seg/U/I outputs "
+                "and targets, got "
+                f"{len(seg_outputs)}/{len(union_outputs)}/{len(intersection_outputs)}/"
+                f"{len(union_targets)}/{len(intersection_targets)}."
+            )
+
+        weights = np.zeros(len(seg_outputs), dtype=np.float32)
+        active_scales = min(self.hierarchy_active_scales, len(weights))
+        weights[:active_scales] = np.asarray(
+            [1 / (2 ** index) for index in range(active_scales)], dtype=np.float32
+        )
+        weights /= weights.sum()
+
+        hierarchy_loss = seg_outputs[0].new_zeros((), dtype=torch.float32)
+        reliability_floor = float(self.hierarchy_reliability_floor)
+        reliability_range = 1.0 - reliability_floor
+        for scale_index, (
+            weight,
+            seg_logits,
+            union_logits,
+            intersection_logits,
+            union_label,
+            intersection_label,
+        ) in enumerate(
+            zip(
+                weights,
+                seg_outputs,
+                union_outputs,
+                intersection_outputs,
+                union_targets,
+                intersection_targets,
+            )
+        ):
+            if weight == 0:
+                continue
+
+            seg_probability = self._foreground_probability(seg_logits)
+            union_probability = self._foreground_probability(union_logits)
+            intersection_probability = self._foreground_probability(intersection_logits)
+
+            if scale_index < self.hierarchy_reliable_scales:
+                union_label = (union_label > 0).float()
+                intersection_label = (intersection_label > 0).float()
+                union_reliability = reliability_floor + reliability_range * (
+                    1.0 - torch.abs(union_probability.detach() - union_label)
+                )
+                intersection_reliability = reliability_floor + reliability_range * (
+                    1.0
+                    - torch.abs(
+                        intersection_probability.detach() - intersection_label
+                    )
+                )
+            else:
+                # dec2 is the actual UIG fusion level. Preserve its hierarchy
+                # gradient instead of attenuating it with downsampled targets.
+                union_reliability = 1.0
+                intersection_reliability = 1.0
+
+            violation = (
+                intersection_reliability
+                * F.relu(intersection_probability - seg_probability)
+                + union_reliability * F.relu(seg_probability - union_probability)
+                + 0.5 * F.relu(intersection_probability - union_probability)
+            )
+            relevance = torch.maximum(
+                torch.maximum(seg_probability, union_probability),
+                intersection_probability,
+            ).detach()
+            normalized_violation = (
+                (violation * relevance).sum() / relevance.sum().clamp_min(1e-6)
+            )
+            hierarchy_loss = hierarchy_loss + float(weight) * normalized_violation
+
+        return self.hierarchy_loss_weight * hierarchy_loss
+
+
 class nnUNetTrainerSegMambaUIGStableOffset(nnUNetTrainerSegMambaUIGStable):
     """Build U/I targets from three D-axis slices separated by a fixed offset."""
 

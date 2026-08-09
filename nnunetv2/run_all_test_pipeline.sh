@@ -1,7 +1,7 @@
 #!/bin/bash
 # ------------------------------------------------------------------------
 # nnU-Net v2 【全量训练 + 独立测试集推理 + 后处理 + 极限评估】ID智能反查版
-# 支持：训练前自动修改 plans.json 中的 batch_size
+# 支持：训练前创建实验配置并修改 plans.json 中的 batch_size
 # ------------------------------------------------------------------------
 
 set -e  # 🛡️ 数值安全防线：任何一步报错，立刻强行熔断退出
@@ -13,8 +13,9 @@ DATASET_ID="${DATASET_ID:-515}"
 # 基础架构配置
 # 跑你的 SegMamba 时，保持下面一致
 PLANS_NAME="${PLANS_NAME:-nnUNetPlans_segmamba_ui}"
-CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_loss_128x96x96}"
-TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchy}"
+CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_fusion_aligned_reliable_128x96x96}"
+CONFIG_PARENT_NAME="${CONFIG_PARENT_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_loss_128x96x96}"
+TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyFusionAlignedReliable}"
 # ====================================================================🌟
 
 
@@ -40,6 +41,12 @@ NUM_THREADS="${NUM_THREADS:-32}"
 RAW_BASE_DIR="${nnUNet_raw:-/home/wjx/CodeData/data/nnUNetData/nnUNet_raw}"
 PREPROCESSED_BASE_DIR="${nnUNet_preprocessed:-/home/wjx/CodeData/data/nnUNetData/nnUNet_preprocessed}"
 RESULTS_BASE_DIR="${nnUNet_results:-/home/wjx/CodeData/code/nnUNet/nnUNet_results}"
+
+# 直接运行本脚本时也提供完整 nnU-Net 环境，并固定使用未编译的 eager 路径。
+export nnUNet_raw="${RAW_BASE_DIR}"
+export nnUNet_preprocessed="${PREPROCESSED_BASE_DIR}"
+export nnUNet_results="${RESULTS_BASE_DIR}"
+export nnUNet_compile=false
 # ====================================================================🌟
 
 
@@ -192,13 +199,14 @@ PY
 }
 
 
-# 🚀 6. 训练前自动修改 plans.json 中的 batch_size
+# 🚀 6. 训练前创建配置并自动修改 plans.json 中的 batch_size
 echo "====================================================================================="
 echo "🛠️ 正在检查并修改 nnU-Net plans.json 中的 batch_size..."
 echo "====================================================================================="
 echo "📂 PREPROCESSED_BASE_DIR : ${PREPROCESSED_BASE_DIR}"
 echo "📄 PLANS_JSON            : ${PLANS_JSON}"
 echo "📐 CONFIG_NAME           : ${CONFIG_NAME}"
+echo "🧬 CONFIG_PARENT_NAME    : ${CONFIG_PARENT_NAME}"
 echo "🧩 TARGET BATCH_SIZE     : ${TRAIN_BATCH_SIZE}"
 echo "-------------------------------------------------------------------------------------"
 
@@ -226,31 +234,43 @@ from pathlib import Path
 
 plans_json = Path("${PLANS_JSON}")
 config_name = "${CONFIG_NAME}"
+parent_config_name = "${CONFIG_PARENT_NAME}"
 batch_size = int("${TRAIN_BATCH_SIZE}")
 
 with plans_json.open("r", encoding="utf-8") as f:
     plans = json.load(f)
 
-if "configurations" not in plans:
+configurations = plans.get("configurations")
+if not isinstance(configurations, dict):
     raise RuntimeError("❌ plans.json 中没有 configurations 字段，无法修改 batch_size")
 
-if config_name not in plans["configurations"]:
-    available = list(plans["configurations"].keys())
-    raise RuntimeError(
-        f"❌ plans.json 中找不到配置 '{config_name}'。"
-        f" 当前可用配置为: {available}"
-    )
+if config_name not in configurations:
+    if parent_config_name not in configurations:
+        available = list(configurations.keys())
+        raise RuntimeError(
+            f"❌ plans.json 中找不到父配置 '{parent_config_name}'，"
+            f"无法创建 '{config_name}'。当前可用配置为: {available}"
+        )
+    configurations[config_name] = {"inherits_from": parent_config_name}
+    print(f"✅ 已创建配置: {config_name} -> inherits_from={parent_config_name}")
 
-old_bs = plans["configurations"][config_name].get("batch_size", None)
-plans["configurations"][config_name]["batch_size"] = batch_size
+old_bs = configurations[config_name].get("batch_size", None)
+configurations[config_name]["batch_size"] = batch_size
 
 with plans_json.open("w", encoding="utf-8") as f:
     json.dump(plans, f, indent=4)
+    f.write("\n")
 
 print(f"✅ batch_size 修改完成: {old_bs} -> {batch_size}")
 PY
 
 echo "====================================================================================="
+
+if [ "${PREPARE_ONLY:-0}" = "1" ]; then
+    trap - EXIT
+    echo "✅ 配置准备完成；PREPARE_ONLY=1，未启动训练。"
+    exit 0
+fi
 
 
 # 🚀 7. 计算 GPU 数量
@@ -278,7 +298,9 @@ echo "   ├─ 🆔 输入 DATASET_ID      : ${DATASET_ID}"
 echo "   ├─ 📦 智能反查 NAME        : ${DATASET_NAME} 🟢 自动锁定成功"
 echo "   ├─ 🧠 TRAINER_NAME        : ${TRAINER_NAME}"
 echo "   ├─ 📐 CONFIG_NAME         : ${CONFIG_NAME}"
+echo "   ├─ 🧬 CONFIG_PARENT_NAME  : ${CONFIG_PARENT_NAME}"
 echo "   ├─ 📐 PLANS_NAME          : ${PLANS_NAME}"
+echo "   ├─ ⚙️ nnUNet_compile     : ${nnUNet_compile}"
 echo "   ├─ 📌 GPU_DEVICES         : CUDA_VISIBLE_DEVICES=${GPU_DEVICES}"
 echo "   ├─ 🧮 NUM_GPUS            : ${NUM_GPUS}"
 echo "   ├─ 📦 TRAIN_BATCH_SIZE    : ${TRAIN_BATCH_SIZE}"

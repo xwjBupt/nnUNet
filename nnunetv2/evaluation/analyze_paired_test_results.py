@@ -271,6 +271,37 @@ def build_analysis(rows: Sequence[Mapping], top_k: int) -> dict:
     }
 
 
+def build_success_gate(
+    analysis: Mapping, candidate_summary: Mapping, baseline_summary: Mapping
+) -> dict:
+    candidate_official = float(candidate_summary["foreground_mean"]["Dice"])
+    baseline_official = float(baseline_summary["foreground_mean"]["Dice"])
+    candidate_recomputed = float(
+        analysis["groups"]["all"]["candidate"]["Dice_mean"]
+    )
+    baseline_recomputed = float(
+        analysis["groups"]["all"]["baseline"]["Dice_mean"]
+    )
+    if not math.isclose(candidate_official, candidate_recomputed, abs_tol=1e-12):
+        raise RuntimeError(
+            "Candidate foreground_mean Dice does not match the per-case mean: "
+            f"{candidate_official} != {candidate_recomputed}"
+        )
+    if not math.isclose(baseline_official, baseline_recomputed, abs_tol=1e-12):
+        raise RuntimeError(
+            "Baseline foreground_mean Dice does not match the per-case mean: "
+            f"{baseline_official} != {baseline_recomputed}"
+        )
+    return {
+        "metric": "independent_test_foreground_macro_dice",
+        "comparison": "strictly_greater_than",
+        "candidate": candidate_official,
+        "baseline": baseline_official,
+        "delta": candidate_official - baseline_official,
+        "passed": candidate_official > baseline_official,
+    }
+
+
 def statistical_inference(
     rows: Sequence[Mapping], bootstrap_samples: int, bootstrap_seed: int
 ) -> dict:
@@ -377,6 +408,12 @@ def print_report(analysis: Mapping, output_dir: Path) -> None:
         "Volume vs Dice delta Spearman: "
         f"rho={spearman['rho']:.4f}, p={spearman['p_value_two_sided']:.6g}"
     )
+    gate = analysis["success_gate"]
+    print(
+        "Strict baseline gate: "
+        f"candidate={gate['candidate']:.8f}, baseline={gate['baseline']:.8f}, "
+        f"delta={gate['delta']:+.8f}, passed={gate['passed']}"
+    )
     print(f"Analysis files: {output_dir}")
     print("=" * 116)
 
@@ -389,6 +426,7 @@ def main() -> None:
     baseline = load_summary(args.baseline.resolve())
     rows = build_case_rows(candidate, baseline, args.label)
     analysis = build_analysis(rows, min(args.top_k, len(rows)))
+    analysis["success_gate"] = build_success_gate(analysis, candidate, baseline)
     analysis["statistical_inference"] = statistical_inference(
         rows, args.bootstrap_samples, args.bootstrap_seed
     )

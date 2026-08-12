@@ -13,9 +13,9 @@ DATASET_ID="${DATASET_ID:-515}"
 # 基础架构配置
 # 跑你的 SegMamba 时，保持下面一致
 PLANS_NAME="${PLANS_NAME:-nnUNetPlans_segmamba_ui}"
-CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_fusion_aligned_reliable_128x96x96}"
+CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_128x96x96}"
 CONFIG_PARENT_NAME="${CONFIG_PARENT_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_loss_128x96x96}"
-TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyFusionAlignedReliable}"
+TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked}"
 # ====================================================================🌟
 
 
@@ -38,11 +38,13 @@ NUM_THREADS="${NUM_THREADS:-32}"
 # 如果系统环境变量中已经设置 nnUNet_raw / nnUNet_preprocessed / nnUNet_results，
 # 则优先使用环境变量；否则使用你当前脚本中的默认物理路径。
 
+NNUNET_ENV_BIN="${NNUNET_ENV_BIN:-/home/wjx/miniconda3/envs/nnunet_seg/bin}"
 RAW_BASE_DIR="${nnUNet_raw:-/home/wjx/CodeData/data/nnUNetData/nnUNet_raw}"
 PREPROCESSED_BASE_DIR="${nnUNet_preprocessed:-/home/wjx/CodeData/data/nnUNetData/nnUNet_preprocessed}"
 RESULTS_BASE_DIR="${nnUNet_results:-/home/wjx/CodeData/code/nnUNet/nnUNet_results}"
 
 # 直接运行本脚本时也提供完整 nnU-Net 环境，并固定使用未编译的 eager 路径。
+export PATH="${NNUNET_ENV_BIN}:${PATH}"
 export nnUNet_raw="${RAW_BASE_DIR}"
 export nnUNet_preprocessed="${PREPROCESSED_BASE_DIR}"
 export nnUNet_results="${RESULTS_BASE_DIR}"

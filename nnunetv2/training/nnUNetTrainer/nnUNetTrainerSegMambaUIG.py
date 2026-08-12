@@ -572,6 +572,158 @@ class nnUNetTrainerSegMambaUIGStableHierarchyFusionAlignedReliable(
         return self.hierarchy_loss_weight * hierarchy_loss
 
 
+class nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked(
+    nnUNetTrainerSegMambaUIGStableHierarchy
+):
+    """Constrain Seg only in target-reliable U/I regions.
+
+    The persistent intersection core may raise Seg confidence, while the
+    exterior of the union envelope may suppress false positives. The uncertain
+    U-I band is left to the main segmentation loss so thin hemorrhages are not
+    removed by an underestimated U branch.
+    """
+
+    default_hierarchy_active_scales = 3
+    default_hierarchy_lower_weight = 1.0
+    default_hierarchy_upper_weight = 1.0
+    default_hierarchy_order_weight = 0.25
+
+    def initialize(self):
+        self.hierarchy_active_scales = self.default_hierarchy_active_scales
+        self.hierarchy_lower_weight = self.default_hierarchy_lower_weight
+        self.hierarchy_upper_weight = self.default_hierarchy_upper_weight
+        self.hierarchy_order_weight = self.default_hierarchy_order_weight
+        super().initialize()
+        self.logger.update_config(
+            {
+                "hierarchy_variant": "core_exterior_masked",
+                "hierarchy_active_scales": self.hierarchy_active_scales,
+                "hierarchy_scale_weights": [4.0 / 7.0, 2.0 / 7.0, 1.0 / 7.0, 0.0],
+                "hierarchy_guidance_detached": True,
+                "hierarchy_core_mask": "intersection_target_positive",
+                "hierarchy_exterior_mask": "union_target_negative_hard_candidates",
+                "hierarchy_uncertain_band_weight": 0.0,
+                "hierarchy_lower_weight": self.hierarchy_lower_weight,
+                "hierarchy_upper_weight": self.hierarchy_upper_weight,
+                "hierarchy_order_weight": self.hierarchy_order_weight,
+            }
+        )
+        self.print_to_log_file(
+            "Core-Exterior Masked hierarchy: "
+            f"weight={self.hierarchy_loss_weight}, active_scales="
+            f"{self.hierarchy_active_scales}, weights=4/7,2/7,1/7,0; "
+            "detached lower bound in I core, detached upper bound outside U, "
+            "no Seg constraint in the uncertain U-I band."
+        )
+
+    @staticmethod
+    def _masked_mean(value: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        return (value * weight).sum() / weight.sum().clamp_min(1e-6)
+
+    def _compute_additional_branch_loss(
+        self, seg_output, u_output, i_output, u_target=None, i_target=None
+    ):
+        if u_output is None or i_output is None:
+            return nnUNetTrainerSegMambaUIGStable._compute_additional_branch_loss(
+                self,
+                seg_output,
+                u_output,
+                i_output,
+                u_target=u_target,
+                i_target=i_target,
+            )
+        if u_target is None or i_target is None:
+            raise RuntimeError(
+                "Core-Exterior Masked hierarchy requires U/I supervision targets."
+            )
+
+        seg_outputs = self._as_list(seg_output)
+        union_outputs = self._as_list(u_output)
+        intersection_outputs = self._as_list(i_output)
+        union_targets = self._as_list(u_target)
+        intersection_targets = self._as_list(i_target)
+        output_counts = {
+            len(seg_outputs),
+            len(union_outputs),
+            len(intersection_outputs),
+            len(union_targets),
+            len(intersection_targets),
+        }
+        if len(output_counts) != 1:
+            raise RuntimeError(
+                "Core-Exterior Masked hierarchy requires matching Seg/U/I outputs "
+                "and targets, got "
+                f"{len(seg_outputs)}/{len(union_outputs)}/{len(intersection_outputs)}/"
+                f"{len(union_targets)}/{len(intersection_targets)}."
+            )
+
+        weights = np.zeros(len(seg_outputs), dtype=np.float32)
+        active_scales = min(self.hierarchy_active_scales, len(weights))
+        weights[:active_scales] = np.asarray(
+            [1 / (2 ** index) for index in range(active_scales)], dtype=np.float32
+        )
+        weights /= weights.sum()
+
+        hierarchy_loss = seg_outputs[0].new_zeros((), dtype=torch.float32)
+        for (
+            weight,
+            seg_logits,
+            union_logits,
+            intersection_logits,
+            union_label,
+            intersection_label,
+        ) in zip(
+            weights,
+            seg_outputs,
+            union_outputs,
+            intersection_outputs,
+            union_targets,
+            intersection_targets,
+        ):
+            if weight == 0:
+                continue
+
+            seg_probability = self._foreground_probability(seg_logits)
+            union_probability = self._foreground_probability(union_logits)
+            intersection_probability = self._foreground_probability(intersection_logits)
+            union_label = (union_label > 0).float()
+            intersection_label = (intersection_label > 0).float()
+
+            union_guidance = union_probability.detach()
+            intersection_guidance = intersection_probability.detach()
+
+            core_mask = intersection_label
+            lower_violation = F.relu(intersection_guidance - seg_probability)
+            lower_loss = self._masked_mean(lower_violation, core_mask)
+
+            # Ignore easy background and normalize only over predicted hard
+            # exterior candidates, preventing the large background volume from
+            # overwhelming small hemorrhage gradients.
+            exterior_mask = 1.0 - union_label
+            exterior_relevance = exterior_mask * torch.maximum(
+                seg_probability, union_guidance
+            ).detach()
+            upper_violation = F.relu(seg_probability - union_guidance)
+            upper_loss = self._masked_mean(upper_violation, exterior_relevance)
+
+            order_violation = F.relu(
+                intersection_probability - union_probability
+            )
+            order_relevance = torch.maximum(
+                intersection_probability, union_probability
+            ).detach()
+            order_loss = self._masked_mean(order_violation, order_relevance)
+
+            scale_loss = (
+                self.hierarchy_lower_weight * lower_loss
+                + self.hierarchy_upper_weight * upper_loss
+                + self.hierarchy_order_weight * order_loss
+            )
+            hierarchy_loss = hierarchy_loss + float(weight) * scale_loss
+
+        return self.hierarchy_loss_weight * hierarchy_loss
+
+
 class nnUNetTrainerSegMambaUIGStableOffset(nnUNetTrainerSegMambaUIGStable):
     """Build U/I targets from three D-axis slices separated by a fixed offset."""
 

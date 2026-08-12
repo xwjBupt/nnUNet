@@ -199,6 +199,110 @@ PY
 }
 
 
+# 在流水线末尾将独立测试集结果直接打印到终端。
+print_experiment_result() {
+    local summary_path="$1"
+
+    python3 - \
+      "$summary_path" \
+      "$DATASET_NAME" \
+      "$TRAINER_NAME" \
+      "$PLANS_NAME" \
+      "$CONFIG_NAME" <<'PY'
+import json
+import math
+import statistics
+import sys
+from pathlib import Path
+
+summary_path = Path(sys.argv[1]).resolve()
+dataset_name = sys.argv[2]
+trainer_name = sys.argv[3]
+plans_name = sys.argv[4]
+config_name = sys.argv[5]
+
+if not summary_path.is_file():
+    raise FileNotFoundError(f"评估结果不存在: {summary_path}")
+
+with summary_path.open("r", encoding="utf-8") as file:
+    summary = json.load(file)
+
+foreground_mean = summary.get("foreground_mean")
+case_results = summary.get("metric_per_case")
+if not isinstance(foreground_mean, dict) or not isinstance(case_results, list):
+    raise RuntimeError(f"{summary_path} 不是有效的 nnU-Net summary.json")
+
+
+def safe_divide(numerator, denominator):
+    return float(numerator) / float(denominator) if denominator else math.nan
+
+
+def format_float(value, digits=5):
+    return "N/A" if not math.isfinite(value) else f"{value:.{digits}f}"
+
+
+dice_values = []
+precision_values = []
+recall_values = []
+for case in case_results:
+    metrics_by_label = case.get("metrics", {})
+    for label, metrics in metrics_by_label.items():
+        if str(label).lower() in {"0", "background"}:
+            continue
+        dice = float(metrics["Dice"])
+        tp = float(metrics["TP"])
+        fp = float(metrics["FP"])
+        fn = float(metrics["FN"])
+        if math.isfinite(dice):
+            dice_values.append(dice)
+        precision = safe_divide(tp, tp + fp)
+        recall = safe_divide(tp, tp + fn)
+        if math.isfinite(precision):
+            precision_values.append(precision)
+        if math.isfinite(recall):
+            recall_values.append(recall)
+
+if not dice_values:
+    raise RuntimeError(f"{summary_path} 中没有有效的前景 Dice")
+
+dice_mean = float(foreground_mean["Dice"])
+dice_std = statistics.pstdev(dice_values)
+dice_median = statistics.median(dice_values)
+precision_mean = statistics.fmean(precision_values) if precision_values else math.nan
+recall_mean = statistics.fmean(recall_values) if recall_values else math.nan
+
+print()
+print("=" * 100)
+print("最终独立测试集实验结果")
+print("=" * 100)
+print(f"Dataset      : {dataset_name}")
+print(f"Trainer      : {trainer_name}")
+print(f"Plans        : {plans_name}")
+print(f"Configuration: {config_name}")
+print(f"Test cases   : {len(case_results)}")
+print("-" * 100)
+print(f"Dice mean    : {format_float(dice_mean)}")
+print(f"Dice std     : {format_float(dice_std)}")
+print(f"Dice median  : {format_float(dice_median)}")
+print(
+    f"Dice range   : [{format_float(min(dice_values))}, "
+    f"{format_float(max(dice_values))}]"
+)
+print(f"IoU mean     : {format_float(float(foreground_mean['IoU']))}")
+print(f"Precision    : {format_float(precision_mean)} (macro)")
+print(f"Recall       : {format_float(recall_mean)} (macro)")
+print(f"TP mean      : {format_float(float(foreground_mean['TP']), 2)}")
+print(f"FP mean      : {format_float(float(foreground_mean['FP']), 2)}")
+print(f"FN mean      : {format_float(float(foreground_mean['FN']), 2)}")
+print(f"Pred voxels  : {format_float(float(foreground_mean['n_pred']), 2)} (mean/case)")
+print(f"Ref voxels   : {format_float(float(foreground_mean['n_ref']), 2)} (mean/case)")
+print("-" * 100)
+print(f"Summary      : {summary_path}")
+print("=" * 100)
+PY
+}
+
+
 # 🚀 6. 训练前创建配置并自动修改 plans.json 中的 batch_size
 echo "====================================================================================="
 echo "🛠️ 正在检查并修改 nnU-Net plans.json 中的 batch_size..."
@@ -432,6 +536,9 @@ update_resultsboard \
   "Test_All_Predictions_PostProcessing"
 
 echo "▶| [STEP 4/4 STOP >>>>>>]"
+
+
+print_experiment_result "${TEST_PRED_PP_DIR}/summary.json"
 
 
 echo "====================================================================================="

@@ -178,6 +178,255 @@ PY
 }
 
 
+# Print one fold's validation metrics immediately after it finishes.
+print_fold_result() {
+    local summary_path="$1"
+    local fold_value="$2"
+
+    python3 - \
+      "$summary_path" \
+      "$fold_value" \
+      "$DATASET_NAME" \
+      "$TRAINER_NAME" \
+      "$PLANS_NAME" \
+      "$CONFIG_NAME" <<'PY'
+import json
+import math
+import statistics
+import sys
+from pathlib import Path
+
+summary_path = Path(sys.argv[1]).resolve()
+fold = sys.argv[2]
+dataset = sys.argv[3]
+trainer = sys.argv[4]
+plans = sys.argv[5]
+configuration = sys.argv[6]
+
+if not summary_path.is_file():
+    raise FileNotFoundError(f"Fold summary not found: {summary_path}")
+
+summary = json.loads(summary_path.read_text(encoding="utf-8"))
+foreground_mean = summary.get("foreground_mean")
+cases = summary.get("metric_per_case")
+if not isinstance(foreground_mean, dict) or not isinstance(cases, list):
+    raise RuntimeError(f"Invalid nnU-Net summary: {summary_path}")
+
+
+def foreground_case_metrics():
+    for case in cases:
+        for label, metrics in case.get("metrics", {}).items():
+            if str(label).lower() not in {"0", "background"}:
+                yield metrics
+
+
+metrics = list(foreground_case_metrics())
+dice = [float(item["Dice"]) for item in metrics if math.isfinite(float(item["Dice"]))]
+precision = [
+    float(item["TP"]) / (float(item["TP"]) + float(item["FP"]))
+    for item in metrics
+    if float(item["TP"]) + float(item["FP"]) > 0
+]
+recall = [
+    float(item["TP"]) / (float(item["TP"]) + float(item["FN"]))
+    for item in metrics
+    if float(item["TP"]) + float(item["FN"]) > 0
+]
+if not dice:
+    raise RuntimeError(f"No finite foreground Dice values in {summary_path}")
+
+print()
+print("=" * 100)
+print(f"Fold {fold} validation result")
+print("=" * 100)
+print(f"Dataset      : {dataset}")
+print(f"Trainer      : {trainer}")
+print(f"Plans        : {plans}")
+print(f"Configuration: {configuration}")
+print(f"Cases        : {len(cases)}")
+print("-" * 100)
+print(f"Dice mean    : {float(foreground_mean['Dice']):.5f}")
+print(f"Dice std     : {statistics.pstdev(dice):.5f}")
+print(f"Dice median  : {statistics.median(dice):.5f}")
+print(f"Dice range   : [{min(dice):.5f}, {max(dice):.5f}]")
+print(f"IoU mean     : {float(foreground_mean['IoU']):.5f}")
+print(f"Precision    : {statistics.fmean(precision):.5f} (macro)")
+print(f"Recall       : {statistics.fmean(recall):.5f} (macro)")
+print(f"TP / FP / FN : {float(foreground_mean['TP']):.2f} / "
+      f"{float(foreground_mean['FP']):.2f} / {float(foreground_mean['FN']):.2f}")
+print(f"Summary      : {summary_path}")
+print("=" * 100)
+PY
+}
+
+
+# Print a fold-by-fold table and pooled metrics after all requested folds finish.
+print_all_fold_results() {
+    python3 - \
+      "$MODEL_DIR" \
+      "$FOLDS" \
+      "$DATASET_NAME" \
+      "$TRAINER_NAME" \
+      "$PLANS_NAME" \
+      "$CONFIG_NAME" <<'PY'
+import json
+import math
+import statistics
+import sys
+from pathlib import Path
+
+model_dir = Path(sys.argv[1]).resolve()
+folds = sys.argv[2].split()
+dataset = sys.argv[3]
+trainer = sys.argv[4]
+plans = sys.argv[5]
+configuration = sys.argv[6]
+
+rows = []
+pooled_metrics = []
+total_cases = 0
+for fold in folds:
+    summary_path = model_dir / f"fold_{fold}" / "validation" / "summary.json"
+    if not summary_path.is_file():
+        raise FileNotFoundError(f"Fold summary not found: {summary_path}")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    foreground_mean = summary["foreground_mean"]
+    cases = summary["metric_per_case"]
+    total_cases += len(cases)
+    rows.append(
+        (
+            fold,
+            len(cases),
+            float(foreground_mean["Dice"]),
+            float(foreground_mean["IoU"]),
+            float(foreground_mean["FP"]),
+            float(foreground_mean["FN"]),
+        )
+    )
+    for case in cases:
+        for label, metrics in case.get("metrics", {}).items():
+            if str(label).lower() not in {"0", "background"}:
+                pooled_metrics.append(metrics)
+
+if not pooled_metrics:
+    raise RuntimeError("No foreground metrics found in completed folds")
+
+dice = [
+    float(item["Dice"])
+    for item in pooled_metrics
+    if math.isfinite(float(item["Dice"]))
+]
+iou = [
+    float(item["IoU"])
+    for item in pooled_metrics
+    if math.isfinite(float(item["IoU"]))
+]
+precision = [
+    float(item["TP"]) / (float(item["TP"]) + float(item["FP"]))
+    for item in pooled_metrics
+    if float(item["TP"]) + float(item["FP"]) > 0
+]
+recall = [
+    float(item["TP"]) / (float(item["TP"]) + float(item["FN"]))
+    for item in pooled_metrics
+    if float(item["TP"]) + float(item["FN"]) > 0
+]
+
+print()
+print("=" * 100)
+print("All completed fold results")
+print("=" * 100)
+print(f"Dataset      : {dataset}")
+print(f"Trainer      : {trainer}")
+print(f"Plans        : {plans}")
+print(f"Configuration: {configuration}")
+print(f"Folds        : {' '.join(folds)}")
+print("-" * 100)
+print(f"{'Fold':<8}{'Cases':>8}{'Dice':>14}{'IoU':>14}{'FP mean':>16}{'FN mean':>16}")
+for fold, cases, fold_dice, fold_iou, fp, fn in rows:
+    print(f"{fold:<8}{cases:>8d}{fold_dice:>14.5f}{fold_iou:>14.5f}{fp:>16.2f}{fn:>16.2f}")
+print("-" * 100)
+print(f"Pooled cases : {total_cases}")
+print(f"Pooled Dice  : {statistics.fmean(dice):.5f}")
+print(f"Dice std     : {statistics.pstdev(dice):.5f}")
+print(f"Dice median  : {statistics.median(dice):.5f}")
+print(f"Dice range   : [{min(dice):.5f}, {max(dice):.5f}]")
+print(f"Pooled IoU   : {statistics.fmean(iou):.5f}")
+print(f"Precision    : {statistics.fmean(precision):.5f} (macro)")
+print(f"Recall       : {statistics.fmean(recall):.5f} (macro)")
+print(f"Fold Dice    : {statistics.fmean(row[2] for row in rows):.5f} +/- "
+      f"{statistics.pstdev(row[2] for row in rows):.5f}")
+print("=" * 100)
+PY
+}
+
+
+# Print the aggregated raw or postprocessed five-fold summary.
+print_final_cv_result() {
+    local summary_path="$1"
+    local result_name="$2"
+
+    python3 - \
+      "$summary_path" \
+      "$result_name" \
+      "$DATASET_NAME" \
+      "$TRAINER_NAME" \
+      "$PLANS_NAME" \
+      "$CONFIG_NAME" <<'PY'
+import json
+import math
+import statistics
+import sys
+from pathlib import Path
+
+summary_path = Path(sys.argv[1]).resolve()
+result_name = sys.argv[2]
+dataset, trainer, plans, configuration = sys.argv[3:7]
+summary = json.loads(summary_path.read_text(encoding="utf-8"))
+foreground_mean = summary["foreground_mean"]
+cases = summary["metric_per_case"]
+metrics = [
+    metric
+    for case in cases
+    for label, metric in case.get("metrics", {}).items()
+    if str(label).lower() not in {"0", "background"}
+]
+dice = [float(item["Dice"]) for item in metrics if math.isfinite(float(item["Dice"]))]
+precision = [
+    float(item["TP"]) / (float(item["TP"]) + float(item["FP"]))
+    for item in metrics
+    if float(item["TP"]) + float(item["FP"]) > 0
+]
+recall = [
+    float(item["TP"]) / (float(item["TP"]) + float(item["FN"]))
+    for item in metrics
+    if float(item["TP"]) + float(item["FN"]) > 0
+]
+
+print()
+print("=" * 100)
+print(f"Final five-fold CV result ({result_name})")
+print("=" * 100)
+print(f"Dataset      : {dataset}")
+print(f"Trainer      : {trainer}")
+print(f"Plans        : {plans}")
+print(f"Configuration: {configuration}")
+print(f"Cases        : {len(cases)}")
+print("-" * 100)
+print(f"Dice mean    : {float(foreground_mean['Dice']):.5f}")
+print(f"Dice std     : {statistics.pstdev(dice):.5f}")
+print(f"Dice median  : {statistics.median(dice):.5f}")
+print(f"IoU mean     : {float(foreground_mean['IoU']):.5f}")
+print(f"Precision    : {statistics.fmean(precision):.5f} (macro)")
+print(f"Recall       : {statistics.fmean(recall):.5f} (macro)")
+print(f"TP / FP / FN : {float(foreground_mean['TP']):.2f} / "
+      f"{float(foreground_mean['FP']):.2f} / {float(foreground_mean['FN']):.2f}")
+print(f"Summary      : {summary_path}")
+print("=" * 100)
+PY
+}
+
+
 # 5. Update plans batch size before training.
 echo "====================================================================================="
 echo "Checking nnU-Net plans batch size"
@@ -289,7 +538,13 @@ for fold in ${FOLDS}; do
     update_resultsboard \
       "${MODEL_DIR}/fold_${fold}/validation/summary.json" \
       "fold${fold}/validation"
+
+    print_fold_result \
+      "${MODEL_DIR}/fold_${fold}/validation/summary.json" \
+      "${fold}"
 done
+
+print_all_fold_results
 
 
 # STEP 2: Accumulate cross-validation predictions and determine postprocessing.
@@ -322,9 +577,15 @@ if [ "${FOLDS}" = "0 1 2 3 4" ]; then
     if [ -f "${CV_DIR}/postprocessed/summary.json" ]; then
         echo "Final postprocessed CV summary:"
         echo "${CV_DIR}/postprocessed/summary.json"
+        print_final_cv_result \
+          "${CV_DIR}/postprocessed/summary.json" \
+          "postprocessed"
     elif [ -f "${CV_DIR}/summary.json" ]; then
         echo "Final raw CV summary:"
         echo "${CV_DIR}/summary.json"
+        print_final_cv_result \
+          "${CV_DIR}/summary.json" \
+          "raw"
     else
         echo "ERROR: expected CV summary not found under ${CV_DIR}"
         exit 1

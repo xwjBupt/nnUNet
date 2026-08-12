@@ -119,6 +119,77 @@ class MemoryEfficientSoftDiceLoss(nn.Module):
         return -dc
 
 
+class ForegroundSampleDiceLoss(nn.Module):
+    """Average Dice over foreground-containing sample/class pairs.
+
+    In DDP, the local loss is scaled so that DDP's gradient averaging yields
+    the same gradient as a single global batch. Empty targets remain supervised
+    by the accompanying cross-entropy term and do not dilute the Dice term.
+    """
+
+    def __init__(self, apply_nonlin: Callable = None, batch_dice: bool = False,
+                 do_bg: bool = True, smooth: float = 1., ddp: bool = True):
+        super().__init__()
+        if batch_dice:
+            raise ValueError("ForegroundSampleDiceLoss requires batch_dice=False")
+        self.do_bg = do_bg
+        self.batch_dice = False
+        self.apply_nonlin = apply_nonlin
+        self.smooth = smooth
+        self.ddp = ddp
+
+    def forward(self, x, y, loss_mask=None):
+        if self.apply_nonlin is not None:
+            x = self.apply_nonlin(x)
+
+        axes = tuple(range(2, x.ndim))
+        with torch.no_grad():
+            if x.ndim != y.ndim:
+                y = y.view((y.shape[0], 1, *y.shape[1:]))
+
+            if x.shape == y.shape:
+                y_onehot = y.to(torch.float32)
+            else:
+                y_onehot = torch.zeros(x.shape, device=x.device, dtype=torch.float32)
+                y_onehot.scatter_(1, y.long(), 1)
+
+            if not self.do_bg:
+                y_onehot = y_onehot[:, 1:]
+
+            if loss_mask is None:
+                sum_gt = y_onehot.sum(axes, dtype=torch.float32)
+            else:
+                sum_gt = (y_onehot * loss_mask).sum(axes, dtype=torch.float32)
+            foreground_present = sum_gt > 0
+
+        if not self.do_bg:
+            x = x[:, 1:]
+
+        if loss_mask is None:
+            intersect = (x * y_onehot).sum(axes, dtype=torch.float32)
+            sum_pred = x.sum(axes, dtype=torch.float32)
+        else:
+            intersect = (x * y_onehot * loss_mask).sum(axes, dtype=torch.float32)
+            sum_pred = (x * loss_mask).sum(axes, dtype=torch.float32)
+
+        dice = (2 * intersect + self.smooth) / (
+            sum_gt + sum_pred + float(self.smooth)
+        ).clamp_min(1e-8)
+        local_dice_sum = (dice * foreground_present).sum()
+        foreground_count = foreground_present.sum().to(
+            device=x.device, dtype=torch.float32
+        )
+
+        if self.ddp:
+            torch.distributed.all_reduce(
+                foreground_count, op=torch.distributed.ReduceOp.SUM
+            )
+            normalizer = foreground_count.clamp_min(1.0)
+            return -local_dice_sum * torch.distributed.get_world_size() / normalizer
+
+        return -local_dice_sum / foreground_count.clamp_min(1.0)
+
+
 def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
     """
     net_output must be (b, c, x, y(, z)))

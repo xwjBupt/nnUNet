@@ -6,6 +6,7 @@ from nnunetv2.training.nnUNetTrainer.nnUNetTrainerSegMambaUI import (
     CosineAnnealingWarmRestartsWithMultipliers,
     nnUNetTrainerSegMambaUI,
 )
+from nnunetv2.training.loss.dice import ForegroundSampleDiceLoss
 from nnunetv2.utilities.collate_outputs import collate_outputs
 
 
@@ -724,27 +725,33 @@ class nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked(
         return self.hierarchy_loss_weight * hierarchy_loss
 
 
-class nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedPerSampleDice(
+class nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleDice(
     nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked
 ):
-    """Use per-sample Dice for Seg/U/I while preserving CoreExteriorMasked."""
+    """Give each foreground sample equal Seg/U/I Dice weight across DDP."""
+
+    dice_loss_class = ForegroundSampleDiceLoss
 
     def initialize(self):
         if self.configuration_manager.batch_dice:
             raise RuntimeError(
-                "CoreExteriorMaskedPerSampleDice requires batch_dice=False in plans."
+                "CoreExteriorMaskedForegroundSampleDice requires batch_dice=False "
+                "in plans."
             )
         super().initialize()
         self.logger.update_config(
             {
-                "dice_aggregation": "per_sample",
+                "dice_aggregation": "global_foreground_sample_mean",
+                "dice_empty_target_policy": "cross_entropy_only",
                 "dice_ddp_all_gather": False,
+                "dice_ddp_global_foreground_count": True,
                 "dice_applies_to": ["seg", "union", "intersection"],
             }
         )
         self.print_to_log_file(
-            "Per-sample Dice: Seg/U/I Dice terms are computed independently for "
-            "each case; DDP does not aggregate Dice statistics across GPUs."
+            "Foreground-sample Dice: Seg/U/I Dice terms are computed per "
+            "foreground sample/class and normalized over the global DDP batch; "
+            "empty targets remain supervised by cross entropy only."
         )
 
 

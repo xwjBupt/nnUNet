@@ -85,6 +85,7 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
     default_union_loss_weight = 0.3
     default_intersection_loss_weight = 0.3
     default_auxiliary_lr_multiplier = 3.0
+    dice_loss_class = MemoryEfficientSoftDiceLoss
 
     def initialize(self):
         ### 🚀 核心参数自定义配置区（可在此自由修改） 🚀 ###
@@ -182,9 +183,9 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
 
     def _build_loss(self):
         if self.label_manager.has_regions:
-            loss = DC_and_BCE_loss({}, {"batch_dice": self.configuration_manager.batch_dice, "do_bg": True, "smooth": 1e-5, "ddp": self.is_ddp}, use_ignore_label=self.label_manager.ignore_label is not None, dice_class=MemoryEfficientSoftDiceLoss)
+            loss = DC_and_BCE_loss({}, {"batch_dice": self.configuration_manager.batch_dice, "do_bg": True, "smooth": 1e-5, "ddp": self.is_ddp}, use_ignore_label=self.label_manager.ignore_label is not None, dice_class=self.dice_loss_class)
         else:
-            loss = DC_and_CE_loss({"batch_dice": self.configuration_manager.batch_dice, "smooth": 1e-5, "do_bg": False, "ddp": self.is_ddp}, {}, weight_ce=1, weight_dice=1, ignore_label=self.label_manager.ignore_label, dice_class=MemoryEfficientSoftDiceLoss)
+            loss = DC_and_CE_loss({"batch_dice": self.configuration_manager.batch_dice, "smooth": 1e-5, "do_bg": False, "ddp": self.is_ddp}, {}, weight_ce=1, weight_dice=1, ignore_label=self.label_manager.ignore_label, dice_class=self.dice_loss_class)
 
         if self.enable_deep_supervision:
             deep_supervision_scales = self._get_deep_supervision_scales()
@@ -239,7 +240,7 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
             weight_ce=1,
             weight_dice=1,
             ignore_label=None,
-            dice_class=MemoryEfficientSoftDiceLoss,
+            dice_class=self.dice_loss_class,
         )
         if self.enable_deep_supervision:
             deep_supervision_scales = self._get_deep_supervision_scales()

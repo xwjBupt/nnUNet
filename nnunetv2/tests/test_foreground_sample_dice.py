@@ -203,6 +203,34 @@ class TestForegroundSampleDiceLoss(unittest.TestCase):
             self.assertIsInstance(loss.dc, ForegroundSampleDiceLoss)
             self.assertFalse(loss.dc.batch_dice)
 
+    def test_small_lesion_has_stronger_relative_gradient_than_batch_dice(self):
+        target = torch.zeros(2, 1, 1, 1, 16, dtype=torch.long)
+        target[0, 0, 0, 0, :1] = 1
+        target[1, 0, 0, 0, :12] = 1
+
+        def sample_gradient_ratio(dice_class, batch_dice: bool) -> float:
+            logits = torch.zeros(2, 2, 1, 1, 16, requires_grad=True)
+            loss = dice_class(
+                apply_nonlin=lambda value: torch.softmax(value, dim=1),
+                batch_dice=batch_dice,
+                do_bg=False,
+                smooth=1e-5,
+                ddp=False,
+            )(logits, target)
+            loss.backward()
+            sample_gradient_norms = logits.grad.square().sum((1, 2, 3, 4)).sqrt()
+            return float(sample_gradient_norms[0] / sample_gradient_norms[1])
+
+        batch_dice_ratio = sample_gradient_ratio(
+            MemoryEfficientSoftDiceLoss, batch_dice=True
+        )
+        foreground_sample_ratio = sample_gradient_ratio(
+            ForegroundSampleDiceLoss, batch_dice=False
+        )
+
+        self.assertGreater(foreground_sample_ratio, batch_dice_ratio * 1.8)
+        self.assertGreater(foreground_sample_ratio, 0.8)
+
 
 if __name__ == "__main__":
     unittest.main()

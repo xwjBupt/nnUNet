@@ -116,12 +116,86 @@ def volume_group(volume_ml: float) -> str:
     raise RuntimeError(f"Unable to assign volume group for {volume_ml}")
 
 
-def get_spacing_mm(reference_file: str) -> Sequence[float]:
-    image = sitk.ReadImage(reference_file)
+def get_spacing_mm(image: sitk.Image, reference_file: str) -> Sequence[float]:
     spacing = tuple(float(value) for value in image.GetSpacing())
     if not spacing or any(value <= 0 for value in spacing):
         raise RuntimeError(f"Invalid spacing {spacing}: {reference_file}")
     return spacing
+
+
+def verify_geometry(
+    reference: sitk.Image,
+    prediction: sitk.Image,
+    prediction_file: Path,
+    model_name: str,
+    identifier: str,
+) -> None:
+    if reference.GetSize() != prediction.GetSize():
+        raise RuntimeError(
+            f"{model_name} prediction size differs for {identifier}: "
+            f"{prediction.GetSize()} != {reference.GetSize()} ({prediction_file})"
+        )
+    for name, reference_values, prediction_values in (
+        ("spacing", reference.GetSpacing(), prediction.GetSpacing()),
+        ("origin", reference.GetOrigin(), prediction.GetOrigin()),
+        ("direction", reference.GetDirection(), prediction.GetDirection()),
+    ):
+        if not np.allclose(
+            reference_values, prediction_values, rtol=1e-6, atol=1e-6
+        ):
+            raise RuntimeError(
+                f"{model_name} prediction {name} differs for {identifier}: "
+                f"{prediction_values} != {reference_values} ({prediction_file})"
+            )
+
+
+def recompute_metrics_from_images(
+    reference_image: sitk.Image,
+    prediction_file: Path,
+    label_value: int,
+    model_name: str,
+    identifier: str,
+) -> dict:
+    prediction_image = sitk.ReadImage(str(prediction_file))
+    verify_geometry(
+        reference_image,
+        prediction_image,
+        prediction_file,
+        model_name,
+        identifier,
+    )
+    reference = sitk.GetArrayViewFromImage(reference_image) == label_value
+    prediction = sitk.GetArrayViewFromImage(prediction_image) == label_value
+    tp = int(np.count_nonzero(reference & prediction))
+    fp = int(np.count_nonzero(~reference & prediction))
+    fn = int(np.count_nonzero(reference & ~prediction))
+    n_pred = tp + fp
+    n_ref = tp + fn
+    return {
+        "Dice": safe_divide(2 * tp, 2 * tp + fp + fn),
+        "IoU": safe_divide(tp, tp + fp + fn),
+        "TP": float(tp),
+        "FP": float(fp),
+        "FN": float(fn),
+        "n_pred": float(n_pred),
+        "n_ref": float(n_ref),
+    }
+
+
+def verify_summary_metrics(
+    summary_metrics: Mapping,
+    recomputed_metrics: Mapping,
+    model_name: str,
+    identifier: str,
+) -> None:
+    for name in METRIC_NAMES:
+        summary_value = float(summary_metrics[name])
+        recomputed_value = float(recomputed_metrics[name])
+        if not math.isclose(summary_value, recomputed_value, rel_tol=1e-12, abs_tol=1e-12):
+            raise RuntimeError(
+                f"{model_name} summary metric differs from prediction for "
+                f"{identifier}: {name}={summary_value}, recomputed={recomputed_value}"
+            )
 
 
 def model_metrics(metrics: Mapping) -> dict:
@@ -136,6 +210,12 @@ def model_metrics(metrics: Mapping) -> dict:
 
 
 def build_case_rows(candidate: Mapping, baseline: Mapping, label: str) -> List[dict]:
+    try:
+        label_value = int(label)
+    except ValueError as error:
+        raise ValueError(
+            f"Image-level metric verification requires an integer label, got {label!r}"
+        ) from error
     candidate_cases = index_cases(candidate, label)
     baseline_cases = index_cases(baseline, label)
     candidate_ids = set(candidate_cases)
@@ -167,10 +247,31 @@ def build_case_rows(candidate: Mapping, baseline: Mapping, label: str) -> List[d
 
         candidate_metrics = model_metrics(candidate_case["metrics"][label])
         baseline_metrics = model_metrics(baseline_case["metrics"][label])
+        reference_image = sitk.ReadImage(str(candidate_reference))
+        candidate_recomputed = recompute_metrics_from_images(
+            reference_image,
+            candidate_prediction,
+            label_value,
+            "Candidate",
+            identifier,
+        )
+        baseline_recomputed = recompute_metrics_from_images(
+            reference_image,
+            baseline_prediction,
+            label_value,
+            "Baseline",
+            identifier,
+        )
+        verify_summary_metrics(
+            candidate_metrics, candidate_recomputed, "Candidate", identifier
+        )
+        verify_summary_metrics(
+            baseline_metrics, baseline_recomputed, "Baseline", identifier
+        )
         if candidate_metrics["n_ref"] != baseline_metrics["n_ref"]:
             raise RuntimeError(f"Reference voxel counts differ for {identifier}")
 
-        spacing_mm = get_spacing_mm(str(candidate_reference))
+        spacing_mm = get_spacing_mm(reference_image, str(candidate_reference))
         voxel_volume_mm3 = math.prod(spacing_mm)
         reference_volume_ml = candidate_metrics["n_ref"] * voxel_volume_mm3 / 1000.0
         row = {

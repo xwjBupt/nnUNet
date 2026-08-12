@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 import SimpleITK as sitk
+import numpy as np
 
 from nnunetv2.evaluation.analyze_paired_test_results import (
     build_analysis,
@@ -45,13 +46,25 @@ class TestPairedTestAnalysis(unittest.TestCase):
             reference = root / f"case_{index}.nii.gz"
             candidate_prediction = root / "candidate" / reference.name
             baseline_prediction = root / "baseline" / reference.name
-            image = sitk.Image([32, 32, 32], sitk.sitkUInt8)
-            image.SetSpacing((1.0, 1.0, 1.0))
+            reference_array = np.zeros((32, 32, 32), dtype=np.uint8)
+            reference_array.flat[:n_ref] = 1
+            baseline_array = np.zeros_like(reference_array)
+            baseline_array.flat[: n_ref - 100] = 1
+            baseline_array.flat[n_ref : n_ref + 100] = 1
+            candidate_array = np.zeros_like(reference_array)
+            candidate_array.flat[: n_ref - 90] = 1
+            candidate_array.flat[n_ref : n_ref + 95] = 1
+
+            image = sitk.GetImageFromArray(reference_array)
+            baseline_image = sitk.GetImageFromArray(baseline_array)
+            candidate_image = sitk.GetImageFromArray(candidate_array)
+            for item in (image, baseline_image, candidate_image):
+                item.SetSpacing((1.0, 1.0, 1.0))
             sitk.WriteImage(image, str(reference))
             candidate_prediction.parent.mkdir(exist_ok=True)
             baseline_prediction.parent.mkdir(exist_ok=True)
-            sitk.WriteImage(image, str(candidate_prediction))
-            sitk.WriteImage(image, str(baseline_prediction))
+            sitk.WriteImage(candidate_image, str(candidate_prediction))
+            sitk.WriteImage(baseline_image, str(baseline_prediction))
             baseline_cases.append(
                 {
                     "reference_file": str(reference),
@@ -132,6 +145,11 @@ class TestPairedTestAnalysis(unittest.TestCase):
         )
         prediction.unlink()
         with self.assertRaisesRegex(FileNotFoundError, "prediction does not exist"):
+            build_case_rows(self.candidate, self.baseline, "1")
+
+    def test_summary_metric_mismatch_is_rejected(self):
+        self.candidate["metric_per_case"][0]["metrics"]["1"]["FN"] += 1
+        with self.assertRaisesRegex(RuntimeError, "summary metric differs"):
             build_case_rows(self.candidate, self.baseline, "1")
 
 

@@ -83,6 +83,12 @@ class TestPairedTestAnalysis(unittest.TestCase):
         all_cases = analysis["groups"]["all"]["paired_delta"]
         self.assertAlmostEqual(all_cases["FN_ml_mean"], -0.01)
         self.assertAlmostEqual(all_cases["FP_ml_mean"], -0.005)
+        candidate = analysis["groups"]["all"]["candidate"]
+        self.assertEqual(candidate["zero_overlap_cases"], 0)
+        self.assertEqual(candidate["severe_failure_cases_dice_lt_0_2"], 0)
+        self.assertGreater(candidate["Dice_p10"], 0.2)
+        self.assertIn("delta_FN_ml", analysis["largest_dice_losses"][0])
+        self.assertIn("delta_FP_ml", analysis["largest_dice_gains"][0])
         self.assertTrue(gate["passed"])
         self.assertGreater(gate["delta"], 0)
 

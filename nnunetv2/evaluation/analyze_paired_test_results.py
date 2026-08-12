@@ -176,9 +176,17 @@ def summarize_model(rows: Sequence[Mapping], prefix: str) -> dict:
     tp_sum = sum(float(row[f"{prefix}_TP"]) for row in rows)
     fp_sum = sum(float(row[f"{prefix}_FP"]) for row in rows)
     fn_sum = sum(float(row[f"{prefix}_FN"]) for row in rows)
+    dice_values = [float(row[f"{prefix}_Dice"]) for row in rows]
     return {
-        "Dice_mean": mean(row[f"{prefix}_Dice"] for row in rows),
-        "Dice_median": median(float(row[f"{prefix}_Dice"]) for row in rows),
+        "Dice_mean": mean(dice_values),
+        "Dice_median": median(dice_values),
+        "Dice_p10": float(np.percentile(dice_values, 10)),
+        "zero_overlap_cases": sum(
+            float(row[f"{prefix}_TP"]) <= 0 for row in rows
+        ),
+        "severe_failure_cases_dice_lt_0_2": sum(
+            value < 0.2 for value in dice_values
+        ),
         "IoU_mean": mean(row[f"{prefix}_IoU"] for row in rows),
         "Precision_macro": mean(row[f"{prefix}_Precision"] for row in rows),
         "Recall_macro": mean(row[f"{prefix}_Recall"] for row in rows),
@@ -250,6 +258,8 @@ def build_analysis(rows: Sequence[Mapping], top_k: int) -> dict:
         "delta_Dice",
         "delta_FP",
         "delta_FN",
+        "delta_FP_ml",
+        "delta_FN_ml",
     )
 
     def select_fields(row: Mapping) -> dict:
@@ -412,6 +422,19 @@ def print_report(analysis: Mapping, output_dir: Path) -> None:
             f"{delta['wins']}/{delta['ties']}/{delta['losses']:>3} "
             f"{format_number(delta['FP_ml_mean'], 4):>13} "
             f"{format_number(delta['FN_ml_mean'], 4):>13}"
+        )
+    print("-" * report_width)
+    print("Failure cases (zero overlap / Dice < 0.2):")
+    for name in ("all", *(item[0] for item in VOLUME_GROUPS)):
+        group = analysis["groups"][name]
+        candidate = group["candidate"]
+        baseline = group["baseline"]
+        print(
+            f"  {name:<10} candidate="
+            f"{candidate['zero_overlap_cases']}/"
+            f"{candidate['severe_failure_cases_dice_lt_0_2']}  baseline="
+            f"{baseline['zero_overlap_cases']}/"
+            f"{baseline['severe_failure_cases_dice_lt_0_2']}"
         )
     print("-" * report_width)
     inference = analysis["statistical_inference"]

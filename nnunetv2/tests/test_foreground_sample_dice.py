@@ -9,17 +9,18 @@ import torch.multiprocessing as mp
 from nnunetv2.training.loss.dice import ForegroundSampleDiceLoss
 
 
-def _make_uneven_batch(rank: int, parameter: torch.Tensor):
+def _make_uneven_batch(
+    rank: int, parameter: torch.Tensor, foreground_counts: tuple[int, ...]
+):
     target = torch.zeros(2, 1, 1, 1, 8, dtype=torch.long)
-    if rank == 0:
-        target[1, 0, 0, 0, :1] = 1
-    else:
-        target[0, 0, 0, 0, :5] = 1
-        target[1, 0, 0, 0, :8] = 1
+    for sample_index in range(foreground_counts[rank]):
+        foreground_length = 1 + ((rank * 3 + sample_index * 4) % 8)
+        target[sample_index, 0, 0, 0, :foreground_length] = 1
     offsets = torch.tensor(
-        [[-0.6, 0.3], [0.1, -0.2]]
-        if rank == 0
-        else [[0.5, -0.4], [-0.1, 0.7]],
+        [
+            [-0.6 + 0.1 * rank, 0.3 - 0.05 * rank],
+            [0.1 + 0.03 * rank, -0.2 + 0.07 * rank],
+        ],
         dtype=torch.float32,
     ).view(2, 2, 1, 1, 1)
     weights = torch.tensor([[-0.7, 1.2]], dtype=torch.float32).view(
@@ -29,13 +30,20 @@ def _make_uneven_batch(rank: int, parameter: torch.Tensor):
     return logits, target
 
 
-def _ddp_equivalence_worker(rank: int, world_size: int, port: int, result_queue):
+def _ddp_equivalence_worker(
+    rank: int,
+    world_size: int,
+    port: int,
+    foreground_counts: tuple[int, ...],
+    result_queue,
+):
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(port)
+    torch.set_num_threads(1)
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
     try:
         parameter = torch.tensor(0.35, requires_grad=True)
-        logits, target = _make_uneven_batch(rank, parameter)
+        logits, target = _make_uneven_batch(rank, parameter, foreground_counts)
         loss = ForegroundSampleDiceLoss(
             apply_nonlin=lambda value: torch.softmax(value, dim=1),
             batch_dice=False,
@@ -54,7 +62,9 @@ def _ddp_equivalence_worker(rank: int, world_size: int, port: int, result_queue)
         if rank == 0:
             reference_parameter = torch.tensor(0.35, requires_grad=True)
             batches = [
-                _make_uneven_batch(item_rank, reference_parameter)
+                _make_uneven_batch(
+                    item_rank, reference_parameter, foreground_counts
+                )
                 for item_rank in range(world_size)
             ]
             reference_loss = ForegroundSampleDiceLoss(
@@ -82,6 +92,28 @@ def _ddp_equivalence_worker(rank: int, world_size: int, port: int, result_queue)
 
 
 class TestForegroundSampleDiceLoss(unittest.TestCase):
+    def assert_ddp_matches_global_batch(
+        self, foreground_counts: tuple[int, ...]
+    ) -> None:
+        context = mp.get_context("spawn")
+        result_queue = context.SimpleQueue()
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        mp.start_processes(
+            _ddp_equivalence_worker,
+            args=(len(foreground_counts), port, foreground_counts, result_queue),
+            nprocs=len(foreground_counts),
+            join=True,
+            start_method="spawn",
+        )
+        rank_losses, reference_loss, averaged_gradient, reference_gradient = (
+            result_queue.get()
+        )
+        for rank_loss in rank_losses:
+            self.assertAlmostEqual(rank_loss, reference_loss, places=6)
+        self.assertAlmostEqual(averaged_gradient, reference_gradient, places=6)
+
     def test_matches_manual_foreground_sample_mean(self):
         torch.manual_seed(515)
         logits = torch.randn(4, 2, 1, 1, 8, requires_grad=True)
@@ -129,24 +161,10 @@ class TestForegroundSampleDiceLoss(unittest.TestCase):
         self.assertEqual(torch.count_nonzero(logits.grad).item(), 0)
 
     def test_two_rank_value_and_gradient_match_global_batch(self):
-        context = mp.get_context("spawn")
-        result_queue = context.SimpleQueue()
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        mp.start_processes(
-            _ddp_equivalence_worker,
-            args=(2, port, result_queue),
-            nprocs=2,
-            join=True,
-            start_method="spawn",
-        )
-        rank_losses, reference_loss, averaged_gradient, reference_gradient = (
-            result_queue.get()
-        )
-        for rank_loss in rank_losses:
-            self.assertAlmostEqual(rank_loss, reference_loss, places=6)
-        self.assertAlmostEqual(averaged_gradient, reference_gradient, places=6)
+        self.assert_ddp_matches_global_batch((1, 2))
+
+    def test_eight_rank_empty_and_uneven_foreground_matches_global_batch(self):
+        self.assert_ddp_matches_global_batch((0, 0, 1, 1, 1, 2, 2, 2))
 
 
 if __name__ == "__main__":

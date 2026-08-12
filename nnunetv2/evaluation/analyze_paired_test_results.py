@@ -58,6 +58,29 @@ def case_id(case: Mapping) -> str:
     return name[: -len(".nii.gz")] if name.endswith(".nii.gz") else Path(name).stem
 
 
+def prediction_path(case: Mapping, identifier: str, model_name: str) -> Path:
+    prediction_file = case.get("prediction_file")
+    if not prediction_file:
+        raise RuntimeError(
+            f"{model_name} metric entry has no prediction_file for {identifier}"
+        )
+    path = Path(prediction_file).resolve()
+    prediction_identifier = (
+        path.name[: -len(".nii.gz")]
+        if path.name.endswith(".nii.gz")
+        else path.stem
+    )
+    if prediction_identifier != identifier:
+        raise RuntimeError(
+            f"{model_name} prediction case ID differs for {identifier}: {path.name}"
+        )
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{model_name} prediction does not exist for {identifier}: {path}"
+        )
+    return path
+
+
 def index_cases(summary: Mapping, label: str) -> Dict[str, dict]:
     indexed = {}
     for case in summary["metric_per_case"]:
@@ -135,6 +158,12 @@ def build_case_rows(candidate: Mapping, baseline: Mapping, label: str) -> List[d
                 f"Reference paths differ for {identifier}: "
                 f"{candidate_reference} != {baseline_reference}"
             )
+        candidate_prediction = prediction_path(
+            candidate_case, identifier, "Candidate"
+        )
+        baseline_prediction = prediction_path(
+            baseline_case, identifier, "Baseline"
+        )
 
         candidate_metrics = model_metrics(candidate_case["metrics"][label])
         baseline_metrics = model_metrics(baseline_case["metrics"][label])
@@ -147,6 +176,8 @@ def build_case_rows(candidate: Mapping, baseline: Mapping, label: str) -> List[d
         row = {
             "case_id": identifier,
             "reference_file": str(candidate_reference),
+            "candidate_prediction_file": str(candidate_prediction),
+            "baseline_prediction_file": str(baseline_prediction),
             "spacing_mm": "x".join(f"{value:g}" for value in spacing_mm),
             "voxel_volume_mm3": voxel_volume_mm3,
             "reference_volume_ml": reference_volume_ml,

@@ -43,18 +43,28 @@ class TestPairedTestAnalysis(unittest.TestCase):
         baseline_cases = []
         for index, n_ref in enumerate(volumes_voxels):
             reference = root / f"case_{index}.nii.gz"
+            candidate_prediction = root / "candidate" / reference.name
+            baseline_prediction = root / "baseline" / reference.name
             image = sitk.Image([32, 32, 32], sitk.sitkUInt8)
             image.SetSpacing((1.0, 1.0, 1.0))
             sitk.WriteImage(image, str(reference))
-            common = {
-                "reference_file": str(reference),
-                "prediction_file": str(root / f"prediction_{index}.nii.gz"),
-            }
+            candidate_prediction.parent.mkdir(exist_ok=True)
+            baseline_prediction.parent.mkdir(exist_ok=True)
+            sitk.WriteImage(image, str(candidate_prediction))
+            sitk.WriteImage(image, str(baseline_prediction))
             baseline_cases.append(
-                {**common, "metrics": {"1": _metrics(n_ref, 100, 100)}}
+                {
+                    "reference_file": str(reference),
+                    "prediction_file": str(baseline_prediction),
+                    "metrics": {"1": _metrics(n_ref, 100, 100)},
+                }
             )
             candidate_cases.append(
-                {**common, "metrics": {"1": _metrics(n_ref, 90, 95)}}
+                {
+                    "reference_file": str(reference),
+                    "prediction_file": str(candidate_prediction),
+                    "metrics": {"1": _metrics(n_ref, 90, 95)},
+                }
             )
         self.baseline = _summary(baseline_cases)
         self.candidate = _summary(candidate_cases)
@@ -115,6 +125,14 @@ class TestPairedTestAnalysis(unittest.TestCase):
         incomplete_candidate = _summary(self.candidate["metric_per_case"][:-1])
         with self.assertRaisesRegex(RuntimeError, "case sets differ"):
             build_case_rows(incomplete_candidate, self.baseline, "1")
+
+    def test_missing_prediction_is_rejected(self):
+        prediction = Path(
+            self.candidate["metric_per_case"][0]["prediction_file"]
+        )
+        prediction.unlink()
+        with self.assertRaisesRegex(FileNotFoundError, "prediction does not exist"):
+            build_case_rows(self.candidate, self.baseline, "1")
 
 
 if __name__ == "__main__":

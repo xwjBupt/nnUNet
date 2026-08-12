@@ -634,22 +634,40 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
     def on_train_end(self):
         super().on_train_end()
         is_main_process = (not self.is_ddp) or (dist.get_rank() == 0)
-        if not is_main_process:
-            return
         if self.best_val_checkpoint_file is None:
             return
-        try:
-            shutil.copyfile(self.best_val_checkpoint_file, join(self.output_folder, "checkpoint_final.pth"))
-        except FileNotFoundError:
-            self.print_to_log_file(
-                "⚠️ 未找到 checkpoint_best_val.pth，保留原始 checkpoint_final.pth。",
-                also_print_to_console=True,
+
+        copied_best = False
+        if is_main_process:
+            try:
+                shutil.copyfile(
+                    self.best_val_checkpoint_file,
+                    join(self.output_folder, "checkpoint_final.pth"),
+                )
+            except FileNotFoundError:
+                self.print_to_log_file(
+                    "⚠️ 未找到 checkpoint_best_val.pth，保留原始 checkpoint_final.pth。",
+                    also_print_to_console=True,
+                )
+            else:
+                copied_best = True
+
+        if self.is_ddp:
+            copied_best_tensor = torch.tensor(
+                [int(copied_best)], dtype=torch.uint8, device=self.device
             )
-        else:
-            self.print_to_log_file(
-                f"🏁 已将验证集最优权重同步为最终 checkpoint: {self.best_val_checkpoint_file} -> checkpoint_final.pth",
-                also_print_to_console=True,
-            )
+            dist.broadcast(copied_best_tensor, src=0)
+            copied_best = bool(copied_best_tensor.item())
+
+        if copied_best:
+            final_checkpoint = join(self.output_folder, "checkpoint_final.pth")
+            self.load_checkpoint(final_checkpoint)
+            if is_main_process:
+                self.print_to_log_file(
+                    "🏁 已将验证集最优权重同步为最终 checkpoint 并重新加载到所有 "
+                    f"DDP rank: {self.best_val_checkpoint_file} -> {final_checkpoint}",
+                    also_print_to_console=True,
+                )
 
     def mfa_checkpoint_save_loads(self, lr, num_epochs):
         self.initial_lr = lr

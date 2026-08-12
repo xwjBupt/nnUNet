@@ -634,6 +634,10 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
 
     def on_train_end(self):
         super().on_train_end()
+        self._synchronize_best_checkpoint_for_final_validation()
+
+    def _synchronize_best_checkpoint_for_final_validation(self):
+        """Make final validation and later inference use the same best weights."""
         is_main_process = (not self.is_ddp) or (dist.get_rank() == 0)
         if self.best_val_checkpoint_file is None:
             return

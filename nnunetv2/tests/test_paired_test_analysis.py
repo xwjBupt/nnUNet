@@ -80,6 +80,9 @@ class TestPairedTestAnalysis(unittest.TestCase):
         self.assertAlmostEqual(rows[0]["reference_volume_ml"], 0.5)
         self.assertAlmostEqual(rows[0]["delta_FN_ml"], -0.01)
         self.assertAlmostEqual(rows[0]["delta_FP_ml"], -0.005)
+        all_cases = analysis["groups"]["all"]["paired_delta"]
+        self.assertAlmostEqual(all_cases["FN_ml_mean"], -0.01)
+        self.assertAlmostEqual(all_cases["FP_ml_mean"], -0.005)
         self.assertTrue(gate["passed"])
         self.assertGreater(gate["delta"], 0)
 

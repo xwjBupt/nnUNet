@@ -392,14 +392,15 @@ def format_number(value: float, digits: int = 5) -> str:
 
 
 def print_report(analysis: Mapping, output_dir: Path) -> None:
-    print("=" * 116)
+    report_width = 122
+    print("=" * report_width)
     print("PAIRED INDEPENDENT-TEST ANALYSIS")
-    print("=" * 116)
+    print("=" * report_width)
     print(
         f"{'group':<12} {'n':>4} {'candidate':>11} {'baseline':>11} "
-        f"{'delta':>10} {'W/T/L':>11} {'delta FP':>12} {'delta FN':>12}"
+        f"{'delta':>10} {'W/T/L':>11} {'dFP ml/case':>13} {'dFN ml/case':>13}"
     )
-    print("-" * 116)
+    print("-" * report_width)
     for name in ("all", *(item[0] for item in VOLUME_GROUPS)):
         group = analysis["groups"][name]
         delta = group["paired_delta"]
@@ -409,10 +410,10 @@ def print_report(analysis: Mapping, output_dir: Path) -> None:
             f"{format_number(group['baseline']['Dice_mean']):>11} "
             f"{format_number(delta['Dice_mean'], 6):>10} "
             f"{delta['wins']}/{delta['ties']}/{delta['losses']:>3} "
-            f"{format_number(delta['FP_mean'], 2):>12} "
-            f"{format_number(delta['FN_mean'], 2):>12}"
+            f"{format_number(delta['FP_ml_mean'], 4):>13} "
+            f"{format_number(delta['FN_ml_mean'], 4):>13}"
         )
-    print("-" * 116)
+    print("-" * report_width)
     inference = analysis["statistical_inference"]
     bootstrap = inference["paired_dice_delta_bootstrap"]
     spearman = inference["reference_volume_vs_dice_delta_spearman"]
@@ -435,7 +436,7 @@ def print_report(analysis: Mapping, output_dir: Path) -> None:
         f"delta={gate['delta']:+.8f}, passed={gate['passed']}"
     )
     print(f"Analysis files: {output_dir}")
-    print("=" * 116)
+    print("=" * report_width)
 
 
 def main() -> None:

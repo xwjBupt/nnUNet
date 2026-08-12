@@ -10,6 +10,8 @@ from statistics import median
 from typing import Dict, Iterable, List, Mapping, Sequence
 
 import SimpleITK as sitk
+import numpy as np
+from scipy.stats import spearmanr, wilcoxon
 
 
 METRIC_NAMES = ("Dice", "IoU", "TP", "FP", "FN", "n_pred", "n_ref")
@@ -33,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--label", default="1")
     parser.add_argument("--top-k", default=10, type=int)
+    parser.add_argument("--bootstrap-samples", default=20000, type=int)
+    parser.add_argument("--bootstrap-seed", default=515, type=int)
     return parser.parse_args()
 
 
@@ -267,6 +271,56 @@ def build_analysis(rows: Sequence[Mapping], top_k: int) -> dict:
     }
 
 
+def statistical_inference(
+    rows: Sequence[Mapping], bootstrap_samples: int, bootstrap_seed: int
+) -> dict:
+    deltas = np.asarray([float(row["delta_Dice"]) for row in rows], dtype=np.float64)
+    volumes = np.asarray(
+        [float(row["reference_volume_ml"]) for row in rows], dtype=np.float64
+    )
+    if not np.all(np.isfinite(deltas)) or not np.all(np.isfinite(volumes)):
+        raise RuntimeError("Dice deltas and reference volumes must all be finite")
+    if bootstrap_samples < 1:
+        raise ValueError("--bootstrap-samples must be at least 1")
+
+    rng = np.random.default_rng(bootstrap_seed)
+    bootstrap_means = np.empty(bootstrap_samples, dtype=np.float64)
+    chunk_size = 1000
+    for start in range(0, bootstrap_samples, chunk_size):
+        stop = min(start + chunk_size, bootstrap_samples)
+        sample_indices = rng.integers(
+            0, len(deltas), size=(stop - start, len(deltas)), endpoint=False
+        )
+        bootstrap_means[start:stop] = deltas[sample_indices].mean(axis=1)
+
+    confidence_low, confidence_high = np.percentile(
+        bootstrap_means, [2.5, 97.5]
+    )
+    wilcoxon_result = wilcoxon(deltas, alternative="two-sided", method="auto")
+    spearman_result = spearmanr(volumes, deltas)
+    return {
+        "paired_dice_delta_bootstrap": {
+            "observed_mean": float(deltas.mean()),
+            "confidence_level": 0.95,
+            "confidence_interval_percentile": [
+                float(confidence_low),
+                float(confidence_high),
+            ],
+            "samples": bootstrap_samples,
+            "seed": bootstrap_seed,
+            "sampling_unit": "case",
+        },
+        "paired_dice_delta_wilcoxon": {
+            "statistic": float(wilcoxon_result.statistic),
+            "p_value_two_sided": float(wilcoxon_result.pvalue),
+        },
+        "reference_volume_vs_dice_delta_spearman": {
+            "rho": float(spearman_result.statistic),
+            "p_value_two_sided": float(spearman_result.pvalue),
+        },
+    }
+
+
 def flatten_group(group: Mapping) -> dict:
     row = {
         key: value
@@ -311,6 +365,18 @@ def print_report(analysis: Mapping, output_dir: Path) -> None:
             f"{format_number(delta['FN_mean'], 2):>12}"
         )
     print("-" * 116)
+    inference = analysis["statistical_inference"]
+    bootstrap = inference["paired_dice_delta_bootstrap"]
+    spearman = inference["reference_volume_vs_dice_delta_spearman"]
+    print(
+        "Paired Dice delta 95% bootstrap CI: "
+        f"[{bootstrap['confidence_interval_percentile'][0]:.6f}, "
+        f"{bootstrap['confidence_interval_percentile'][1]:.6f}]"
+    )
+    print(
+        "Volume vs Dice delta Spearman: "
+        f"rho={spearman['rho']:.4f}, p={spearman['p_value_two_sided']:.6g}"
+    )
     print(f"Analysis files: {output_dir}")
     print("=" * 116)
 
@@ -323,6 +389,9 @@ def main() -> None:
     baseline = load_summary(args.baseline.resolve())
     rows = build_case_rows(candidate, baseline, args.label)
     analysis = build_analysis(rows, min(args.top_k, len(rows)))
+    analysis["statistical_inference"] = statistical_inference(
+        rows, args.bootstrap_samples, args.bootstrap_seed
+    )
     analysis.update(
         {
             "candidate_summary": str(args.candidate.resolve()),

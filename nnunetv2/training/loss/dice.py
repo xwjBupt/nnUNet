@@ -181,11 +181,20 @@ class ForegroundSampleDiceLoss(nn.Module):
         )
 
         if self.ddp:
-            torch.distributed.all_reduce(
-                foreground_count, op=torch.distributed.ReduceOp.SUM
+            global_stats = torch.stack(
+                (foreground_count, local_dice_sum.detach().to(torch.float32))
             )
-            normalizer = foreground_count.clamp_min(1.0)
-            return -local_dice_sum * torch.distributed.get_world_size() / normalizer
+            torch.distributed.all_reduce(
+                global_stats, op=torch.distributed.ReduceOp.SUM
+            )
+            normalizer = global_stats[0].clamp_min(1.0)
+            global_loss_value = -global_stats[1] / normalizer
+            local_gradient_loss = (
+                -local_dice_sum * torch.distributed.get_world_size() / normalizer
+            )
+            return local_gradient_loss + (
+                global_loss_value - local_gradient_loss.detach()
+            )
 
         return -local_dice_sum / foreground_count.clamp_min(1.0)
 

@@ -724,6 +724,30 @@ class nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked(
         return self.hierarchy_loss_weight * hierarchy_loss
 
 
+class nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedPerSampleDice(
+    nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked
+):
+    """Use per-sample Dice for Seg/U/I while preserving CoreExteriorMasked."""
+
+    def initialize(self):
+        if self.configuration_manager.batch_dice:
+            raise RuntimeError(
+                "CoreExteriorMaskedPerSampleDice requires batch_dice=False in plans."
+            )
+        super().initialize()
+        self.logger.update_config(
+            {
+                "dice_aggregation": "per_sample",
+                "dice_ddp_all_gather": False,
+                "dice_applies_to": ["seg", "union", "intersection"],
+            }
+        )
+        self.print_to_log_file(
+            "Per-sample Dice: Seg/U/I Dice terms are computed independently for "
+            "each case; DDP does not aggregate Dice statistics across GPUs."
+        )
+
+
 class nnUNetTrainerSegMambaUIGStableOffset(nnUNetTrainerSegMambaUIGStable):
     """Build U/I targets from three D-axis slices separated by a fixed offset."""
 

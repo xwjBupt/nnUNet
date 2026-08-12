@@ -1,12 +1,20 @@
 import os
 import socket
 import unittest
+from types import SimpleNamespace
 
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from nnunetv2.training.loss.dice import ForegroundSampleDiceLoss
+from nnunetv2.training.loss.dice import (
+    ForegroundSampleDiceLoss,
+    MemoryEfficientSoftDiceLoss,
+)
+from nnunetv2.training.nnUNetTrainer.nnUNetTrainerSegMambaUIG import (
+    nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked,
+    nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleDice,
+)
 
 
 def _make_uneven_batch(
@@ -92,6 +100,18 @@ def _ddp_equivalence_worker(
 
 
 class TestForegroundSampleDiceLoss(unittest.TestCase):
+    @staticmethod
+    def build_seg_and_aux_losses(trainer_class, batch_dice: bool):
+        trainer = object.__new__(trainer_class)
+        trainer.label_manager = SimpleNamespace(
+            has_regions=False,
+            ignore_label=None,
+        )
+        trainer.configuration_manager = SimpleNamespace(batch_dice=batch_dice)
+        trainer.is_ddp = False
+        trainer.enable_deep_supervision = False
+        return trainer._build_loss(), trainer._build_binary_aux_loss()
+
     def assert_ddp_matches_global_batch(
         self, foreground_counts: tuple[int, ...]
     ) -> None:
@@ -165,6 +185,23 @@ class TestForegroundSampleDiceLoss(unittest.TestCase):
 
     def test_eight_rank_empty_and_uneven_foreground_matches_global_batch(self):
         self.assert_ddp_matches_global_batch((0, 0, 1, 1, 1, 2, 2, 2))
+
+    def test_only_foreground_sample_trainer_wires_new_dice_to_all_branches(self):
+        parent_losses = self.build_seg_and_aux_losses(
+            nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked,
+            batch_dice=True,
+        )
+        candidate_losses = self.build_seg_and_aux_losses(
+            nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleDice,
+            batch_dice=False,
+        )
+
+        for loss in parent_losses:
+            self.assertIsInstance(loss.dc, MemoryEfficientSoftDiceLoss)
+            self.assertTrue(loss.dc.batch_dice)
+        for loss in candidate_losses:
+            self.assertIsInstance(loss.dc, ForegroundSampleDiceLoss)
+            self.assertFalse(loss.dc.batch_dice)
 
 
 if __name__ == "__main__":

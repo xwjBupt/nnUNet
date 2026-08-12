@@ -154,8 +154,16 @@ def build_case_rows(candidate: Mapping, baseline: Mapping, label: str) -> List[d
         ):
             for name, value in metrics.items():
                 row[f"{prefix}_{name}"] = value
+            for name in ("TP", "FP", "FN", "n_pred", "n_ref"):
+                row[f"{prefix}_{name}_ml"] = (
+                    metrics[name] * voxel_volume_mm3 / 1000.0
+                )
         for name in (*METRIC_NAMES, "Precision", "Recall"):
             row[f"delta_{name}"] = candidate_metrics[name] - baseline_metrics[name]
+        for name in ("TP", "FP", "FN", "n_pred", "n_ref"):
+            row[f"delta_{name}_ml"] = (
+                row[f"candidate_{name}_ml"] - row[f"baseline_{name}_ml"]
+            )
         rows.append(row)
     return rows
 
@@ -179,6 +187,12 @@ def summarize_model(rows: Sequence[Mapping], prefix: str) -> dict:
         "TP_sum": tp_sum,
         "FP_sum": fp_sum,
         "FN_sum": fn_sum,
+        "TP_ml_mean": mean(row[f"{prefix}_TP_ml"] for row in rows),
+        "FP_ml_mean": mean(row[f"{prefix}_FP_ml"] for row in rows),
+        "FN_ml_mean": mean(row[f"{prefix}_FN_ml"] for row in rows),
+        "TP_ml_sum": sum(float(row[f"{prefix}_TP_ml"]) for row in rows),
+        "FP_ml_sum": sum(float(row[f"{prefix}_FP_ml"]) for row in rows),
+        "FN_ml_sum": sum(float(row[f"{prefix}_FN_ml"]) for row in rows),
     }
 
 
@@ -203,6 +217,10 @@ def summarize_group(name: str, rows: Sequence[Mapping]) -> dict:
             "FN_mean": mean(row["delta_FN"] for row in rows),
             "FP_sum": sum(float(row["delta_FP"]) for row in rows),
             "FN_sum": sum(float(row["delta_FN"]) for row in rows),
+            "FP_ml_mean": mean(row["delta_FP_ml"] for row in rows),
+            "FN_ml_mean": mean(row["delta_FN_ml"] for row in rows),
+            "FP_ml_sum": sum(float(row["delta_FP_ml"]) for row in rows),
+            "FN_ml_sum": sum(float(row["delta_FN_ml"]) for row in rows),
             "wins": sum(delta > tolerance for delta in deltas),
             "ties": sum(abs(delta) <= tolerance for delta in deltas),
             "losses": sum(delta < -tolerance for delta in deltas),

@@ -11,7 +11,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence
 
 import SimpleITK as sitk
 import numpy as np
-from scipy.stats import spearmanr, wilcoxon
+from scipy.stats import ConstantInputWarning, spearmanr, wilcoxon
 
 
 METRIC_NAMES = ("Dice", "IoU", "TP", "FP", "FN", "n_pred", "n_ref")
@@ -327,8 +327,25 @@ def statistical_inference(
     confidence_low, confidence_high = np.percentile(
         bootstrap_means, [2.5, 97.5]
     )
-    wilcoxon_result = wilcoxon(deltas, alternative="two-sided", method="auto")
-    spearman_result = spearmanr(volumes, deltas)
+    if np.all(deltas == 0):
+        wilcoxon_statistic = 0.0
+        wilcoxon_p_value = 1.0
+    else:
+        wilcoxon_result = wilcoxon(deltas, alternative="two-sided", method="auto")
+        wilcoxon_statistic = float(wilcoxon_result.statistic)
+        wilcoxon_p_value = float(wilcoxon_result.pvalue)
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ConstantInputWarning)
+        spearman_result = spearmanr(volumes, deltas)
+    spearman_rho = float(spearman_result.statistic)
+    spearman_p_value = float(spearman_result.pvalue)
+    if not math.isfinite(spearman_rho):
+        spearman_rho = None
+    if not math.isfinite(spearman_p_value):
+        spearman_p_value = None
     return {
         "paired_dice_delta_bootstrap": {
             "observed_mean": float(deltas.mean()),
@@ -342,12 +359,12 @@ def statistical_inference(
             "sampling_unit": "case",
         },
         "paired_dice_delta_wilcoxon": {
-            "statistic": float(wilcoxon_result.statistic),
-            "p_value_two_sided": float(wilcoxon_result.pvalue),
+            "statistic": wilcoxon_statistic,
+            "p_value_two_sided": wilcoxon_p_value,
         },
         "reference_volume_vs_dice_delta_spearman": {
-            "rho": float(spearman_result.statistic),
-            "p_value_two_sided": float(spearman_result.pvalue),
+            "rho": spearman_rho,
+            "p_value_two_sided": spearman_p_value,
         },
     }
 
@@ -404,10 +421,13 @@ def print_report(analysis: Mapping, output_dir: Path) -> None:
         f"[{bootstrap['confidence_interval_percentile'][0]:.6f}, "
         f"{bootstrap['confidence_interval_percentile'][1]:.6f}]"
     )
-    print(
-        "Volume vs Dice delta Spearman: "
-        f"rho={spearman['rho']:.4f}, p={spearman['p_value_two_sided']:.6g}"
-    )
+    if spearman["rho"] is None:
+        print("Volume vs Dice delta Spearman: undefined (constant input)")
+    else:
+        print(
+            "Volume vs Dice delta Spearman: "
+            f"rho={spearman['rho']:.4f}, p={spearman['p_value_two_sided']:.6g}"
+        )
     gate = analysis["success_gate"]
     print(
         "Strict baseline gate: "

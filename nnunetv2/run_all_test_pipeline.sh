@@ -13,9 +13,9 @@ DATASET_ID="${DATASET_ID:-515}"
 # 基础架构配置
 # 跑你的 SegMamba 时，保持下面一致
 PLANS_NAME="${PLANS_NAME:-nnUNetPlans_segmamba_ui}"
-CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_128x96x96}"
-CONFIG_PARENT_NAME="${CONFIG_PARENT_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_loss_128x96x96}"
-TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked}"
+CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_foreground_sample_dice_128x96x96}"
+CONFIG_PARENT_NAME="${CONFIG_PARENT_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_128x96x96}"
+TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleDice}"
 # ====================================================================🌟
 
 
@@ -29,6 +29,7 @@ GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"  # 你想用的 GPU 卡号，逗�
 # 3. 如果想每卡 batch size≈2，8 张卡时应设置为 16
 # 4. 如果想每卡 batch size≈4，8 张卡时应设置为 32
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-16}"
+TRAIN_BATCH_DICE="${TRAIN_BATCH_DICE:-false}"
 
 NUM_THREADS="${NUM_THREADS:-32}"
 # ====================================================================🌟
@@ -81,7 +82,11 @@ TEST_PRED_PP_DIR="${MODEL_DIR}/Test_All_Predictions_PostProcessing"
 
 PLANS_JSON="${PREPROCESSED_BASE_DIR}/${DATASET_NAME}/${PLANS_NAME}.json"
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 SCRIPT_COPY_PATH="${MODEL_DIR}/$(basename "$SCRIPT_PATH")"
+BASELINE_MODEL_RELATIVE_PATH="${BASELINE_MODEL_RELATIVE_PATH:-nnUNetTrainer__nnUNetPlans__3d_fullres}"
+BASELINE_SUMMARY="${RESULTS_BASE_DIR}/${DATASET_NAME}/${BASELINE_MODEL_RELATIVE_PATH}/Test_All_Predictions_PostProcessing/summary.json"
+PAIRED_ANALYSIS_DIR="${MODEL_DIR}/paired_vs_nnunet_baseline"
 
 save_pipeline_script() {
     local exit_code=$?
@@ -314,6 +319,7 @@ echo "📄 PLANS_JSON            : ${PLANS_JSON}"
 echo "📐 CONFIG_NAME           : ${CONFIG_NAME}"
 echo "🧬 CONFIG_PARENT_NAME    : ${CONFIG_PARENT_NAME}"
 echo "🧩 TARGET BATCH_SIZE     : ${TRAIN_BATCH_SIZE}"
+echo "🎯 TARGET BATCH_DICE     : ${TRAIN_BATCH_DICE}"
 echo "-------------------------------------------------------------------------------------"
 
 if [ ! -f "$PLANS_JSON" ]; then
@@ -342,6 +348,13 @@ plans_json = Path("${PLANS_JSON}")
 config_name = "${CONFIG_NAME}"
 parent_config_name = "${CONFIG_PARENT_NAME}"
 batch_size = int("${TRAIN_BATCH_SIZE}")
+batch_dice_text = "${TRAIN_BATCH_DICE}".strip().lower()
+if batch_dice_text not in {"true", "false"}:
+    raise ValueError(
+        "❌ TRAIN_BATCH_DICE 必须为 true 或 false，"
+        f"当前值为: {batch_dice_text!r}"
+    )
+batch_dice = batch_dice_text == "true"
 
 with plans_json.open("r", encoding="utf-8") as f:
     plans = json.load(f)
@@ -361,13 +374,16 @@ if config_name not in configurations:
     print(f"✅ 已创建配置: {config_name} -> inherits_from={parent_config_name}")
 
 old_bs = configurations[config_name].get("batch_size", None)
+old_batch_dice = configurations[config_name].get("batch_dice", None)
 configurations[config_name]["batch_size"] = batch_size
+configurations[config_name]["batch_dice"] = batch_dice
 
 with plans_json.open("w", encoding="utf-8") as f:
     json.dump(plans, f, indent=4)
     f.write("\n")
 
 print(f"✅ batch_size 修改完成: {old_bs} -> {batch_size}")
+print(f"✅ batch_dice 修改完成: {old_batch_dice} -> {batch_dice}")
 PY
 
 echo "====================================================================================="
@@ -410,6 +426,7 @@ echo "   ├─ ⚙️ nnUNet_compile     : ${nnUNet_compile}"
 echo "   ├─ 📌 GPU_DEVICES         : CUDA_VISIBLE_DEVICES=${GPU_DEVICES}"
 echo "   ├─ 🧮 NUM_GPUS            : ${NUM_GPUS}"
 echo "   ├─ 📦 TRAIN_BATCH_SIZE    : ${TRAIN_BATCH_SIZE}"
+echo "   ├─ 🎯 TRAIN_BATCH_DICE    : ${TRAIN_BATCH_DICE}"
 echo "   └─ 🧵 NUM_THREADS         : ${NUM_THREADS} CPU Threads"
 echo "-------------------------------------------------------------------------------------"
 echo "📂 [派生绝对物理路径图谱]:"
@@ -541,6 +558,21 @@ echo "▶| [STEP 4/4 STOP >>>>>>]"
 
 
 print_experiment_result "${TEST_PRED_PP_DIR}/summary.json"
+
+if [ -f "$BASELINE_SUMMARY" ]; then
+    echo "▶| [PAIRED ANALYSIS START >>>>>>] 正在执行病例级、体积分层及 FP/FN 严格配对分析..."
+    python3 "${SCRIPT_DIR}/evaluation/analyze_paired_test_results.py" \
+      --candidate "${TEST_PRED_PP_DIR}/summary.json" \
+      --baseline "$BASELINE_SUMMARY" \
+      --output-dir "$PAIRED_ANALYSIS_DIR" \
+      --label 1 \
+      --top-k 15 \
+      --bootstrap-samples 10000 \
+      --bootstrap-seed 515
+    echo "▶| [PAIRED ANALYSIS STOP >>>>>>]"
+else
+    echo "⚠️ 未找到严格基线 summary，跳过配对分析: ${BASELINE_SUMMARY}"
+fi
 
 
 echo "====================================================================================="

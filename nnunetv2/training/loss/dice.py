@@ -199,6 +199,52 @@ class ForegroundSampleDiceLoss(nn.Module):
         return -local_dice_sum / foreground_count.clamp_min(1.0)
 
 
+class GlobalForegroundSampleDiceBlendLoss(nn.Module):
+    """Blend global batch Dice with foreground-sample Dice.
+
+    Global Dice remains the dominant objective and preserves false-positive
+    pressure from empty samples. The foreground-sample term contributes a
+    bounded amount of case-balanced foreground supervision.
+    """
+
+    foreground_sample_weight = 0.2
+
+    def __init__(self, apply_nonlin: Callable = None, batch_dice: bool = False,
+                 do_bg: bool = True, smooth: float = 1., ddp: bool = True):
+        super().__init__()
+        if not batch_dice:
+            raise ValueError(
+                "GlobalForegroundSampleDiceBlendLoss requires batch_dice=True"
+            )
+        self.do_bg = do_bg
+        self.batch_dice = True
+        self.apply_nonlin = apply_nonlin
+        self.smooth = smooth
+        self.ddp = ddp
+        self.global_dice = MemoryEfficientSoftDiceLoss(
+            apply_nonlin=apply_nonlin,
+            batch_dice=True,
+            do_bg=do_bg,
+            smooth=smooth,
+            ddp=ddp,
+        )
+        self.foreground_sample_dice = ForegroundSampleDiceLoss(
+            apply_nonlin=apply_nonlin,
+            batch_dice=False,
+            do_bg=do_bg,
+            smooth=smooth,
+            ddp=ddp,
+        )
+
+    def forward(self, x, y, loss_mask=None):
+        foreground_weight = float(self.foreground_sample_weight)
+        global_weight = 1.0 - foreground_weight
+        return (
+            global_weight * self.global_dice(x, y, loss_mask)
+            + foreground_weight * self.foreground_sample_dice(x, y, loss_mask)
+        )
+
+
 def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
     """
     net_output must be (b, c, x, y(, z)))

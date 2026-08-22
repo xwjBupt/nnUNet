@@ -13,9 +13,9 @@ DATASET_ID="${DATASET_ID:-515}"
 # 基础架构配置
 # 跑你的 SegMamba 时，保持下面一致
 PLANS_NAME="${PLANS_NAME:-nnUNetPlans_segmamba_ui}"
-CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_foreground_sample_dice_128x96x96}"
+CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_seg_hybrid_dice20_128x96x96}"
 CONFIG_PARENT_NAME="${CONFIG_PARENT_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_128x96x96}"
-TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleDice}"
+TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedSegHybridDice20}"
 # ====================================================================🌟
 
 
@@ -29,7 +29,7 @@ GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"  # 你想用的 GPU 卡号，逗�
 # 3. 如果想每卡 batch size≈2，8 张卡时应设置为 16
 # 4. 如果想每卡 batch size≈4，8 张卡时应设置为 32
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-16}"
-TRAIN_BATCH_DICE="${TRAIN_BATCH_DICE:-false}"
+TRAIN_BATCH_DICE="${TRAIN_BATCH_DICE:-true}"
 
 NUM_THREADS="${NUM_THREADS:-32}"
 # ====================================================================🌟

@@ -9,11 +9,13 @@ import torch.multiprocessing as mp
 
 from nnunetv2.training.loss.dice import (
     ForegroundSampleDiceLoss,
+    GlobalForegroundSampleDiceBlendLoss,
     MemoryEfficientSoftDiceLoss,
 )
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainerSegMambaUIG import (
     nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked,
     nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleDice,
+    nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedSegHybridDice20,
 )
 
 
@@ -43,6 +45,7 @@ def _ddp_equivalence_worker(
     world_size: int,
     port: int,
     foreground_counts: tuple[int, ...],
+    loss_kind: str,
     result_queue,
 ):
     os.environ["MASTER_ADDR"] = "127.0.0.1"
@@ -52,9 +55,14 @@ def _ddp_equivalence_worker(
     try:
         parameter = torch.tensor(0.35, requires_grad=True)
         logits, target = _make_uneven_batch(rank, parameter, foreground_counts)
-        loss = ForegroundSampleDiceLoss(
+        loss_class = {
+            "foreground_sample": ForegroundSampleDiceLoss,
+            "hybrid": GlobalForegroundSampleDiceBlendLoss,
+        }[loss_kind]
+        batch_dice = loss_kind == "hybrid"
+        loss = loss_class(
             apply_nonlin=lambda value: torch.softmax(value, dim=1),
-            batch_dice=False,
+            batch_dice=batch_dice,
             do_bg=False,
             smooth=1e-5,
             ddp=True,
@@ -75,9 +83,9 @@ def _ddp_equivalence_worker(
                 )
                 for item_rank in range(world_size)
             ]
-            reference_loss = ForegroundSampleDiceLoss(
+            reference_loss = loss_class(
                 apply_nonlin=lambda value: torch.softmax(value, dim=1),
-                batch_dice=False,
+                batch_dice=batch_dice,
                 do_bg=False,
                 smooth=1e-5,
                 ddp=False,
@@ -113,7 +121,9 @@ class TestForegroundSampleDiceLoss(unittest.TestCase):
         return trainer._build_loss(), trainer._build_binary_aux_loss()
 
     def assert_ddp_matches_global_batch(
-        self, foreground_counts: tuple[int, ...]
+        self,
+        foreground_counts: tuple[int, ...],
+        loss_kind: str = "foreground_sample",
     ) -> None:
         context = mp.get_context("spawn")
         result_queue = context.SimpleQueue()
@@ -122,7 +132,13 @@ class TestForegroundSampleDiceLoss(unittest.TestCase):
             port = sock.getsockname()[1]
         mp.start_processes(
             _ddp_equivalence_worker,
-            args=(len(foreground_counts), port, foreground_counts, result_queue),
+            args=(
+                len(foreground_counts),
+                port,
+                foreground_counts,
+                loss_kind,
+                result_queue,
+            ),
             nprocs=len(foreground_counts),
             join=True,
             start_method="spawn",
@@ -186,6 +202,43 @@ class TestForegroundSampleDiceLoss(unittest.TestCase):
     def test_eight_rank_empty_and_uneven_foreground_matches_global_batch(self):
         self.assert_ddp_matches_global_batch((0, 0, 1, 1, 1, 2, 2, 2))
 
+    def test_hybrid_eight_rank_value_and_gradient_match_global_batch(self):
+        self.assert_ddp_matches_global_batch(
+            (0, 0, 1, 1, 1, 2, 2, 2), loss_kind="hybrid"
+        )
+
+    def test_hybrid_matches_weighted_component_losses(self):
+        torch.manual_seed(515)
+        logits = torch.randn(4, 2, 1, 1, 8)
+        target = torch.zeros(4, 1, 1, 1, 8, dtype=torch.long)
+        target[1, 0, 0, 0, :1] = 1
+        target[2, 0, 0, 0, :5] = 1
+        target[3, 0, 0, 0, :8] = 1
+        kwargs = {
+            "apply_nonlin": lambda value: torch.softmax(value, dim=1),
+            "do_bg": False,
+            "smooth": 1e-5,
+            "ddp": False,
+        }
+
+        hybrid = GlobalForegroundSampleDiceBlendLoss(
+            batch_dice=True, **kwargs
+        )(logits, target)
+        global_dice = MemoryEfficientSoftDiceLoss(
+            batch_dice=True, **kwargs
+        )(logits, target)
+        foreground_sample_dice = ForegroundSampleDiceLoss(
+            batch_dice=False, **kwargs
+        )(logits, target)
+
+        torch.testing.assert_close(
+            hybrid, 0.8 * global_dice + 0.2 * foreground_sample_dice
+        )
+
+    def test_hybrid_requires_batch_dice(self):
+        with self.assertRaisesRegex(ValueError, "requires batch_dice=True"):
+            GlobalForegroundSampleDiceBlendLoss(batch_dice=False)
+
     def test_only_foreground_sample_trainer_wires_new_dice_to_all_branches(self):
         parent_losses = self.build_seg_and_aux_losses(
             nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked,
@@ -202,6 +255,19 @@ class TestForegroundSampleDiceLoss(unittest.TestCase):
         for loss in candidate_losses:
             self.assertIsInstance(loss.dc, ForegroundSampleDiceLoss)
             self.assertFalse(loss.dc.batch_dice)
+
+    def test_seg_only_hybrid_trainer_keeps_auxiliary_global_batch_dice(self):
+        seg_loss, auxiliary_loss = self.build_seg_and_aux_losses(
+            nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedSegHybridDice20,
+            batch_dice=True,
+        )
+
+        self.assertIsInstance(
+            seg_loss.dc, GlobalForegroundSampleDiceBlendLoss
+        )
+        self.assertTrue(seg_loss.dc.batch_dice)
+        self.assertIsInstance(auxiliary_loss.dc, MemoryEfficientSoftDiceLoss)
+        self.assertTrue(auxiliary_loss.dc.batch_dice)
 
     def test_small_lesion_has_stronger_relative_gradient_than_batch_dice(self):
         target = torch.zeros(2, 1, 1, 1, 16, dtype=torch.long)

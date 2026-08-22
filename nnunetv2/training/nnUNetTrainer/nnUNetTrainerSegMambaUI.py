@@ -86,6 +86,8 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
     default_intersection_loss_weight = 0.3
     default_auxiliary_lr_multiplier = 3.0
     dice_loss_class = MemoryEfficientSoftDiceLoss
+    seg_dice_loss_class = None
+    auxiliary_dice_loss_class = None
 
     def initialize(self):
         ### 🚀 核心参数自定义配置区（可在此自由修改） 🚀 ###
@@ -182,10 +184,11 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
         return [[1.0, 1.0, 1.0], [0.5, 0.5, 0.5], [0.25, 0.25, 0.25], [0.125, 0.125, 0.125]]
 
     def _build_loss(self):
+        dice_loss_class = self.seg_dice_loss_class or self.dice_loss_class
         if self.label_manager.has_regions:
-            loss = DC_and_BCE_loss({}, {"batch_dice": self.configuration_manager.batch_dice, "do_bg": True, "smooth": 1e-5, "ddp": self.is_ddp}, use_ignore_label=self.label_manager.ignore_label is not None, dice_class=self.dice_loss_class)
+            loss = DC_and_BCE_loss({}, {"batch_dice": self.configuration_manager.batch_dice, "do_bg": True, "smooth": 1e-5, "ddp": self.is_ddp}, use_ignore_label=self.label_manager.ignore_label is not None, dice_class=dice_loss_class)
         else:
-            loss = DC_and_CE_loss({"batch_dice": self.configuration_manager.batch_dice, "smooth": 1e-5, "do_bg": False, "ddp": self.is_ddp}, {}, weight_ce=1, weight_dice=1, ignore_label=self.label_manager.ignore_label, dice_class=self.dice_loss_class)
+            loss = DC_and_CE_loss({"batch_dice": self.configuration_manager.batch_dice, "smooth": 1e-5, "do_bg": False, "ddp": self.is_ddp}, {}, weight_ce=1, weight_dice=1, ignore_label=self.label_manager.ignore_label, dice_class=dice_loss_class)
 
         if self.enable_deep_supervision:
             deep_supervision_scales = self._get_deep_supervision_scales()
@@ -234,13 +237,14 @@ class nnUNetTrainerSegMambaUI(nnUNetTrainer):
         return optimizer, lr_scheduler
 
     def _build_binary_aux_loss(self):
+        dice_loss_class = self.auxiliary_dice_loss_class or self.dice_loss_class
         loss = DC_and_CE_loss(
             {"batch_dice": self.configuration_manager.batch_dice, "smooth": 1e-5, "do_bg": False, "ddp": self.is_ddp},
             {},
             weight_ce=1,
             weight_dice=1,
             ignore_label=None,
-            dice_class=self.dice_loss_class,
+            dice_class=dice_loss_class,
         )
         if self.enable_deep_supervision:
             deep_supervision_scales = self._get_deep_supervision_scales()

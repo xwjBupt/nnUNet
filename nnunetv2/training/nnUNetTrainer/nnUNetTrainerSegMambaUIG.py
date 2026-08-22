@@ -6,7 +6,11 @@ from nnunetv2.training.nnUNetTrainer.nnUNetTrainerSegMambaUI import (
     CosineAnnealingWarmRestartsWithMultipliers,
     nnUNetTrainerSegMambaUI,
 )
-from nnunetv2.training.loss.dice import ForegroundSampleDiceLoss
+from nnunetv2.training.loss.dice import (
+    ForegroundSampleDiceLoss,
+    GlobalForegroundSampleDiceBlendLoss,
+    MemoryEfficientSoftDiceLoss,
+)
 from nnunetv2.utilities.collate_outputs import collate_outputs
 
 
@@ -752,6 +756,37 @@ class nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleD
             "Foreground-sample Dice: Seg/U/I Dice terms are computed per "
             "foreground sample/class and normalized over the global DDP batch; "
             "empty targets remain supervised by cross entropy only."
+        )
+
+
+class nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedSegHybridDice20(
+    nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMasked
+):
+    """Blend global and foreground-sample Dice only for the Seg branch."""
+
+    seg_dice_loss_class = GlobalForegroundSampleDiceBlendLoss
+    auxiliary_dice_loss_class = MemoryEfficientSoftDiceLoss
+
+    def initialize(self):
+        if not self.configuration_manager.batch_dice:
+            raise RuntimeError(
+                "CoreExteriorMaskedSegHybridDice20 requires batch_dice=True "
+                "in plans."
+            )
+        super().initialize()
+        self.logger.update_config(
+            {
+                "seg_dice_aggregation": "global_batch_80_foreground_sample_20",
+                "seg_global_batch_dice_weight": 0.8,
+                "seg_foreground_sample_dice_weight": 0.2,
+                "auxiliary_dice_aggregation": "global_batch",
+                "dice_empty_target_policy": "global_batch_penalty_via_prediction_sum",
+                "hybrid_dice_applies_to": ["seg"],
+            }
+        )
+        self.print_to_log_file(
+            "Seg-only Hybrid Dice20: Seg Dice is 80% global batch Dice and "
+            "20% foreground-sample Dice; U/I retain global batch Dice."
         )
 
 

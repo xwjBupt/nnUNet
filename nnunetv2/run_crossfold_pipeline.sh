@@ -11,8 +11,8 @@ set -e
 DATASET_ID="517"
 
 PLANS_NAME="nnUNetPlans_segmamba_uig"
-CONFIG_NAME="segmamba"
-TRAINER_NAME="nnUNetTrainerSegMamba"
+CONFIG_NAME="segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_foreground_sample_dice_96x96x96"
+TRAINER_NAME="nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleDice"
 
 # Train these folds. Keep 0 1 2 3 4 for full cross-validation.
 FOLDS="0"
@@ -23,7 +23,7 @@ FOLDS="0"
 GPU_DEVICES="4,5,6,7"
 
 # Total batch size used by nnU-Net. For DDP it must be >= number of GPUs.
-TRAIN_BATCH_SIZE=8
+TRAIN_BATCH_SIZE=4
 
 NUM_THREADS=16
 # ====================================================================
@@ -34,6 +34,13 @@ RAW_BASE_DIR="${nnUNet_raw:-/home/wjx/CodeData/data/nnUNetData/nnUNet_raw}"
 PREPROCESSED_BASE_DIR="${nnUNet_preprocessed:-/home/wjx/CodeData/data/nnUNetData/nnUNet_preprocessed}"
 RESULTS_BASE_DIR="${nnUNet_results:-/home/wjx/CodeData/code/nnUNet/nnUNet_results}"
 # ====================================================================
+
+NNUNET_ENV_BIN="${NNUNET_ENV_BIN:-/home/wjx/miniconda3/envs/nnunet_seg/bin}"
+export PATH="${NNUNET_ENV_BIN}:${PATH}"
+export nnUNet_raw="${RAW_BASE_DIR}"
+export nnUNet_preprocessed="${PREPROCESSED_BASE_DIR}"
+export nnUNet_results="${RESULTS_BASE_DIR}"
+export nnUNet_compile=false
 
 
 # 4. Resolve dataset name from ID.

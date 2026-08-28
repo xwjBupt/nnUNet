@@ -10,8 +10,8 @@ set -e
 # ================== 1. Dataset/model configuration ==================
 DATASET_ID="517"
 
-PLANS_NAME="nnUNetPlans_segmamba_uig"
-CONFIG_NAME="segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_foreground_sample_dice_96x96x96"
+PLANS_NAME="nnUNetPlans_segmamba_ui"
+CONFIG_NAME="segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_foreground_sample_dice_128x96x96"
 TRAINER_NAME="nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedForegroundSampleDice"
 
 # Train these folds. Keep 0 1 2 3 4 for full cross-validation.
@@ -20,10 +20,10 @@ FOLDS="0"
 
 
 # ================== 2. GPU/resource configuration ==================
-GPU_DEVICES="4,5,6,7"
+GPU_DEVICES="0,1,2,3,4,5,6,7"
 
 # Total batch size used by nnU-Net. For DDP it must be >= number of GPUs.
-TRAIN_BATCH_SIZE=4
+TRAIN_BATCH_SIZE=24
 
 NUM_THREADS=16
 # ====================================================================

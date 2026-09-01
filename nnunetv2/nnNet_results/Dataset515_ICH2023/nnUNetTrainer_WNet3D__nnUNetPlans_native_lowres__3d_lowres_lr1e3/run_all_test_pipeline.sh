@@ -30,7 +30,6 @@ TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-14}"
 TRAIN_BATCH_DICE="${TRAIN_BATCH_DICE:-true}"
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-500}"
 INITIAL_LR="${INITIAL_LR:-1e-3}"
-UXNET_INITIAL_LR="${UXNET_INITIAL_LR:-1e-4}"
 CONTINUE_TRAINING="${CONTINUE_TRAINING:-0}"
 
 NUM_THREADS="${NUM_THREADS:-32}"
@@ -54,8 +53,6 @@ export nnUNet_results="${RESULTS_BASE_DIR}"
 export nnUNet_compile=false
 export NNUNET_WNET_EPOCHS="${TRAIN_EPOCHS}"
 export NNUNET_WNET_INITIAL_LR="${INITIAL_LR}"
-export NNUNET_3DUXNET_EPOCHS="${TRAIN_EPOCHS}"
-export NNUNET_3DUXNET_INITIAL_LR="${UXNET_INITIAL_LR}"
 # ====================================================================🌟
 
 
@@ -450,7 +447,6 @@ echo "   ├─ 📦 TRAIN_BATCH_SIZE    : ${TRAIN_BATCH_SIZE}"
 echo "   ├─ 🎯 TRAIN_BATCH_DICE    : ${TRAIN_BATCH_DICE}"
 echo "   ├─ 🔁 TRAIN_EPOCHS        : ${TRAIN_EPOCHS}"
 echo "   ├─ 📉 INITIAL_LR          : ${INITIAL_LR}"
-echo "   ├─ 📉 UXNET_INITIAL_LR    : ${UXNET_INITIAL_LR}"
 echo "   ├─ ♻️ CONTINUE_TRAINING   : ${CONTINUE_TRAINING}"
 echo "   └─ 🧵 NUM_THREADS         : ${NUM_THREADS} CPU Threads"
 echo "-------------------------------------------------------------------------------------"

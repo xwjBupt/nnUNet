@@ -1,0 +1,3 @@
+dataset,relative_path,fold,Dice,FN,FP,IoU,TN,TP,n_pred,n_ref
+Dataset515_ICH2023,nnUNetTrainer_WNet3D__nnUNetPlans_native_lowres__3d_lowres_lr1e3,Test_All_Predictions_PostProcessing,0.79177,3196.85124,3524.92562,0.69332,7484292.23967,20169.85124,23694.77686,23366.70248
+Dataset515_ICH2023,nnUNetTrainer_WNet3D__nnUNetPlans_native_lowres__3d_lowres_lr1e3,fold_all/validation,0.87211,2693.38571,2479.73214,0.78404,7419568.16071,23152.32143,25632.05357,25845.70714

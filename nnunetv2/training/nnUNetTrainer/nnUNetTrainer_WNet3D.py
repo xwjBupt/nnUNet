@@ -5,6 +5,7 @@ from torch.nn import init
 import functools
 from torch.distributions.uniform import Uniform
 import numpy as np
+import os
 from timm.models.layers import DropPath, trunc_normal_
 
 BNNorm3d = nn.BatchNorm3d
@@ -513,17 +514,24 @@ class nnUNetTrainer_WNet3D(nnUNetTrainer):
         configuration: str,
         fold: int,
         dataset_json: dict,
-        unpack_dataset: bool = True,
         device: torch.device = torch.device("cuda"),
     ):
         super().__init__(
-            plans, configuration, fold, dataset_json, unpack_dataset, device
+            plans, configuration, fold, dataset_json, device
         )
-        self.enable_deep_supervision = True
+        # WNet3D downsamples the depth axis from its first encoder block, while
+        # the Dataset515 3d_fullres plans keep depth intact for the first stages.
+        # Use the final full-resolution head to avoid incompatible supervision scales.
+        self.enable_deep_supervision = False
+        self.find_unused_parameters = True
         # self.oversample_foreground_percent = 0.6
-        self.initial_lr = 1e-2
+        self.initial_lr = float(os.environ.get("NNUNET_WNET_INITIAL_LR", "1e-2"))
         # self.weight_decay = 3e-5
-        self.num_epochs = 500
+        self.num_epochs = int(os.environ.get("NNUNET_WNET_EPOCHS", "500"))
+        if "NNUNET_WNET_ITERATIONS" in os.environ:
+            self.num_iterations_per_epoch = int(os.environ["NNUNET_WNET_ITERATIONS"])
+        if "NNUNET_WNET_VAL_ITERATIONS" in os.environ:
+            self.num_val_iterations_per_epoch = int(os.environ["NNUNET_WNET_VAL_ITERATIONS"])
 
     def set_deep_supervision_enabled(self, enabled: bool):
         """

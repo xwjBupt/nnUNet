@@ -288,7 +288,11 @@ class nnUNetTrainer(object):
             # if ddp, wrap in DDP wrapper
             if self.is_ddp:
                 self.network = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.network)
-                self.network = DDP(self.network, device_ids=[self.local_rank])
+                self.network = DDP(
+                    self.network,
+                    device_ids=[self.local_rank],
+                    find_unused_parameters=getattr(self, "find_unused_parameters", False),
+                )
 
             self.loss = self._build_loss()
 

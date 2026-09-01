@@ -129,4 +129,5 @@ nnUNet_results/*
 *.pkl
 *.nii.gz
 *.dcm
-
+/home/wjx/CodaData/code/nnUNet/nnunetv2/nnNet_results/*
+*.lock

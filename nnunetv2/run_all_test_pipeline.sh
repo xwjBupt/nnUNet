@@ -1,7 +1,7 @@
 #!/bin/bash
 # ------------------------------------------------------------------------
-# nnU-Net v2 【全量训练 + 独立测试集推理 + 后处理 + 极限评估】ID智能反查版
-# 支持：训练前创建实验配置并修改 plans.json 中的 batch_size
+# nnU-Net v2 WNet3D 全量训练 + 独立测试集推理 + 评估流水线
+# 所有实验都通过本脚本启动，并将脚本副本保存到对应实验目录。
 # ------------------------------------------------------------------------
 
 set -e  # 🛡️ 数值安全防线：任何一步报错，立刻强行熔断退出
@@ -10,17 +10,15 @@ set -e  # 🛡️ 数值安全防线：任何一步报错，立刻强行熔断�
 # 现在你只需要手动确定 ID 即可，脚本会自动帮你抓取完整的 DATASET_NAME
 DATASET_ID="${DATASET_ID:-515}"
 
-# 基础架构配置
-# 跑你的 SegMamba 时，保持下面一致
-PLANS_NAME="${PLANS_NAME:-nnUNetPlans_segmamba_ui}"
-CONFIG_NAME="${CONFIG_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_seg_hybrid_dice20_128x96x96}"
-CONFIG_PARENT_NAME="${CONFIG_PARENT_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_128x96x96}"
-TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyCoreExteriorMaskedSegHybridDice20}"
+PLANS_NAME="${PLANS_NAME:-nnUNetPlans_native_lowres}"
+CONFIG_NAME="${CONFIG_NAME:-3d_lowres_lr1e3}"
+CONFIG_PARENT_NAME="${CONFIG_PARENT_NAME:-3d_lowres}"
+TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainer_WNet3D}"
 # ====================================================================🌟
 
 
 # 🌟================== 2. 显卡与运算资源自定义配置区 ==================🌟
-GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"  # 你想用的 GPU 卡号，逗号分隔
+GPU_DEVICES="${GPU_DEVICES:-0,1,3,4,5,6,7}"  # 物理 GPU 卡号，明确排除 2 号卡
 
 # ✅ 这里修改训练 batch size
 # 注意：
@@ -28,8 +26,11 @@ GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"  # 你想用的 GPU 卡号，逗�
 # 2. 如果你用 8 张卡，TRAIN_BATCH_SIZE=8 通常相当于每卡 batch size≈1
 # 3. 如果想每卡 batch size≈2，8 张卡时应设置为 16
 # 4. 如果想每卡 batch size≈4，8 张卡时应设置为 32
-TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-16}"
+TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-14}"
 TRAIN_BATCH_DICE="${TRAIN_BATCH_DICE:-true}"
+TRAIN_EPOCHS="${TRAIN_EPOCHS:-500}"
+INITIAL_LR="${INITIAL_LR:-1e-3}"
+CONTINUE_TRAINING="${CONTINUE_TRAINING:-0}"
 
 NUM_THREADS="${NUM_THREADS:-32}"
 # ====================================================================🌟
@@ -40,9 +41,9 @@ NUM_THREADS="${NUM_THREADS:-32}"
 # 则优先使用环境变量；否则使用你当前脚本中的默认物理路径。
 
 NNUNET_ENV_BIN="${NNUNET_ENV_BIN:-/home/wjx/miniconda3/envs/nnunet_seg/bin}"
-RAW_BASE_DIR="${nnUNet_raw:-/home/wjx/CodeData/data/nnUNetData/nnUNet_raw}"
-PREPROCESSED_BASE_DIR="${nnUNet_preprocessed:-/home/wjx/CodeData/data/nnUNetData/nnUNet_preprocessed}"
-RESULTS_BASE_DIR="${nnUNet_results:-/home/wjx/CodeData/code/nnUNet/nnUNet_results}"
+RAW_BASE_DIR="${nnUNet_raw:-/home/wjx/CodaData/data/nnUNetData/nnUNet_raw}"
+PREPROCESSED_BASE_DIR="${nnUNet_preprocessed:-/home/wjx/CodaData/data/nnUNetData/nnUNet_preprocessed}"
+RESULTS_BASE_DIR="${nnUNet_results:-/home/wjx/CodaData/code/nnUNet/nnunetv2/nnNet_results}"
 
 # 直接运行本脚本时也提供完整 nnU-Net 环境，并固定使用未编译的 eager 路径。
 export PATH="${NNUNET_ENV_BIN}:${PATH}"
@@ -50,6 +51,8 @@ export nnUNet_raw="${RAW_BASE_DIR}"
 export nnUNet_preprocessed="${PREPROCESSED_BASE_DIR}"
 export nnUNet_results="${RESULTS_BASE_DIR}"
 export nnUNet_compile=false
+export NNUNET_WNET_EPOCHS="${TRAIN_EPOCHS}"
+export NNUNET_WNET_INITIAL_LR="${INITIAL_LR}"
 # ====================================================================🌟
 
 
@@ -69,6 +72,13 @@ if [ -z "$DETECTED_NAME" ]; then
 else
     DATASET_NAME="$DETECTED_NAME"
 fi
+
+case ",${GPU_DEVICES}," in
+    *,",2,"*)
+        echo "❌ 错误: GPU_DEVICES=${GPU_DEVICES} 包含被禁止使用的物理 2 号卡。"
+        exit 1
+        ;;
+esac
 
 
 # 🚀 5. 基于自动反查出的变量，全自动派生绝对路径
@@ -101,6 +111,14 @@ save_pipeline_script() {
 }
 
 trap save_pipeline_script EXIT
+
+mkdir -p "$MODEL_DIR"
+if cp "$SCRIPT_PATH" "$SCRIPT_COPY_PATH"; then
+    echo "📄 已在实验启动时保存流水线脚本副本: $SCRIPT_COPY_PATH"
+else
+    echo "❌ 错误: 无法保存流水线脚本副本: $SCRIPT_COPY_PATH"
+    exit 1
+fi
 
 
 # 将一个 nnU-Net summary.json 追加到结果看板；同一实验重复运行时更新原记录。
@@ -427,6 +445,9 @@ echo "   ├─ 📌 GPU_DEVICES         : CUDA_VISIBLE_DEVICES=${GPU_DEVICES}"
 echo "   ├─ 🧮 NUM_GPUS            : ${NUM_GPUS}"
 echo "   ├─ 📦 TRAIN_BATCH_SIZE    : ${TRAIN_BATCH_SIZE}"
 echo "   ├─ 🎯 TRAIN_BATCH_DICE    : ${TRAIN_BATCH_DICE}"
+echo "   ├─ 🔁 TRAIN_EPOCHS        : ${TRAIN_EPOCHS}"
+echo "   ├─ 📉 INITIAL_LR          : ${INITIAL_LR}"
+echo "   ├─ ♻️ CONTINUE_TRAINING   : ${CONTINUE_TRAINING}"
 echo "   └─ 🧵 NUM_THREADS         : ${NUM_THREADS} CPU Threads"
 echo "-------------------------------------------------------------------------------------"
 echo "📂 [派生绝对物理路径图谱]:"
@@ -448,21 +469,27 @@ echo "⚠️ 提醒：如果该 MODEL_DIR 下已经存在旧 checkpoint，batch_
 echo "⚠️ 如果你想完全用新 batch_size 从头训练，建议先手动确认是否需要清理旧的 fold_all 结果目录。"
 
 if [ "$NUM_GPUS" -gt 1 ]; then
-    CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" nnUNetv2_train \
+    TRAIN_CMD=(nnUNetv2_train \
       "${DATASET_NAME}" \
       "${CONFIG_NAME}" \
       all \
       -tr "${TRAINER_NAME}" \
       -num_gpus "${NUM_GPUS}" \
-      -p "${PLANS_NAME}"
+      -p "${PLANS_NAME}")
 else
-    CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" nnUNetv2_train \
+    TRAIN_CMD=(nnUNetv2_train \
       "${DATASET_NAME}" \
       "${CONFIG_NAME}" \
       all \
       -tr "${TRAINER_NAME}" \
-      -p "${PLANS_NAME}"
+      -p "${PLANS_NAME}")
 fi
+
+if [ "${CONTINUE_TRAINING}" = "1" ]; then
+    TRAIN_CMD+=(--c)
+fi
+
+CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" "${TRAIN_CMD[@]}"
 
 update_resultsboard \
   "${MODEL_DIR}/fold_all/validation/summary.json" \
@@ -490,14 +517,29 @@ fi
 
 mkdir -p "${TEST_PRED_DIR}"
 
-CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" nnUNetv2_predict \
-  -d "${DATASET_NAME}" \
-  -i "${TEST_IMAGES}" \
-  -o "${TEST_PRED_DIR}" \
-  -f all \
-  -tr "${TRAINER_NAME}" \
-  -c "${CONFIG_NAME}" \
-  -p "${PLANS_NAME}"
+# Split independent test cases across all allowed physical GPUs.
+IFS=',' read -r -a GPU_LIST <<< "${GPU_DEVICES}"
+PREDICT_PIDS=()
+for PART_ID in "${!GPU_LIST[@]}"; do
+    GPU_ID="${GPU_LIST[$PART_ID]}"
+    CUDA_VISIBLE_DEVICES="${GPU_ID}" nnUNetv2_predict \
+      -d "${DATASET_NAME}" \
+      -i "${TEST_IMAGES}" \
+      -o "${TEST_PRED_DIR}" \
+      -f all \
+      -tr "${TRAINER_NAME}" \
+      -c "${CONFIG_NAME}" \
+      -p "${PLANS_NAME}" \
+      -num_parts "${NUM_GPUS}" \
+      -part_id "${PART_ID}" \
+      -npp 1 -nps 1 \
+      --disable_progress_bar \
+      > "${MODEL_DIR}/test_predict_part${PART_ID}.log" 2>&1 &
+    PREDICT_PIDS+=("$!")
+done
+for PREDICT_PID in "${PREDICT_PIDS[@]}"; do
+    wait "${PREDICT_PID}"
+done
 
 echo "▶| [STEP 2/4 STOP >>>>>>]"
 echo "-----------------------------------------------------------------"

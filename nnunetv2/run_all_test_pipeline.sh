@@ -4,7 +4,18 @@
 # 支持：训练前创建实验配置并修改 plans.json 中的 batch_size
 # ------------------------------------------------------------------------
 
-set -e  # 🛡️ 数值安全防线：任何一步报错，立刻强行熔断退出
+set -euo pipefail  # 任一步失败即退出，并让 tee 正确传递训练错误。
+
+# PIPELINE_METHOD=nnunet 保持原有 UIG/nnU-Net 流程；mednext/3duxnet/nnwnet 时，
+# 直接在本脚本内启动对应官方网络的 Dataset515 外部适配器。
+PIPELINE_METHOD="${PIPELINE_METHOD:-nnunet}"
+case "${PIPELINE_METHOD}" in
+    nnunet|mednext|3duxnet|nnwnet) ;;
+    *)
+        echo "❌ PIPELINE_METHOD 仅支持 nnunet、mednext、3duxnet 或 nnwnet，当前值: ${PIPELINE_METHOD}" >&2
+        exit 2
+        ;;
+esac
 
 # 🌟================== 1. 数据集 ID 核心配置区 ==================🌟
 # 现在你只需要手动确定 ID 即可，脚本会自动帮你抓取完整的 DATASET_NAME
@@ -20,7 +31,18 @@ TRAINER_NAME="${TRAINER_NAME:-nnUNetTrainerSegMambaUIGStableHierarchyCoreExterio
 
 
 # 🌟================== 2. 显卡与运算资源自定义配置区 ==================🌟
-GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"  # 你想用的 GPU 卡号，逗号分隔
+if [ "${PIPELINE_METHOD}" = "nnwnet" ]; then
+    # nnWNet uses all eight cards by default. Override GPU_DEVICES to choose
+    # another set when some cards are reserved by a different experiment.
+    GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"
+elif [ "${PIPELINE_METHOD}" = "mednext" ] || [ "${PIPELINE_METHOD}" = "3duxnet" ]; then
+    # Dataset515 当前机器中 GPU 0-3 由其他正式实验占用，外部基线默认使用空闲的 4-7。
+    # 可通过 GPU_DEVICES 覆盖，例如 A100 服务器使用 GPU_DEVICES=0,1,2,3,4,5。
+    GPU_DEVICES="${GPU_DEVICES:-4,5,6,7}"
+else
+    GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"
+fi
+
 
 # ✅ 这里修改训练 batch size
 # 注意：
@@ -51,6 +73,467 @@ export nnUNet_preprocessed="${PREPROCESSED_BASE_DIR}"
 export nnUNet_results="${RESULTS_BASE_DIR}"
 export nnUNet_compile=false
 # ====================================================================🌟
+
+
+# 🧠 nnWNet Dataset515 配置
+# nnWNet 官方仓库提供的 3D WNet 模型已经同步到当前 nnUNet 工程的
+# nnUNetTrainer_WNet3D.py。本分支只生成独立 plans 文件并继续走下面的
+# nnU-Net all-in-test 流程，因此训练、预测、评估和结果看板保持一致。
+if [ "${PIPELINE_METHOD}" = "nnwnet" ]; then
+    if [ "${DATASET_ID}" != "515" ]; then
+        echo "❌ nnWNet 适配器当前仅实现 Dataset515，DATASET_ID 必须为 515。" >&2
+        exit 1
+    fi
+
+    CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    WNET_ROOT="${WNET_ROOT:-${CODE_ROOT}/nnWNet}"
+    WNET_SOURCE_COMMIT="cfcd2e09754fc832c3099a2ed39d86a90007dbcb"
+    WNET_SOURCE_PLAN_NAME="${WNET_SOURCE_PLAN_NAME:-nnUNetPlans_segmamba_ui}"
+    WNET_PLANS_NAME="${WNET_PLANS_NAME:-nnUNetPlans_nnwnet}"
+    WNET_CONFIG_NAME="${WNET_CONFIG_NAME:-nnwnet_128x96x96}"
+    WNET_CONFIG_PARENT_NAME="${WNET_CONFIG_PARENT_NAME:-segmamba_uig_dec2_logit_boundary_hierarchy_core_exterior_masked_foreground_sample_dice_128x96x96}"
+    # Probe a real WNet forward/backward step when the experiment starts, then
+    # use the same integer local batch on every DDP rank. PREPARE_ONLY skips
+    # probing and never allocates CUDA memory.
+    IFS=',' read -r -a WNET_GPU_ARRAY <<< "${GPU_DEVICES}"
+    WNET_WORLD_SIZE="${#WNET_GPU_ARRAY[@]}"
+    WNET_AUTO_BATCH="${WNET_AUTO_BATCH:-true}"
+    WNET_LOCAL_BATCH_SIZE="${WNET_LOCAL_BATCH_SIZE:-0}"
+    WNET_BATCH_SIZE="${WNET_BATCH_SIZE:-0}"
+    WNET_MAX_LOCAL_BATCH="${WNET_MAX_LOCAL_BATCH:-8}"
+    WNET_BATCH_MEMORY_FRACTION="${WNET_BATCH_MEMORY_FRACTION:-0.90}"
+    WNET_BATCH_DICE="${WNET_BATCH_DICE:-false}"
+    WNET_DEEP_SUPERVISION="${WNET_DEEP_SUPERVISION:-true}"
+    WNET_NUM_EPOCHS="${WNET_NUM_EPOCHS:-500}"
+    WNET_ITERATIONS_PER_EPOCH="${WNET_ITERATIONS_PER_EPOCH:-250}"
+    WNET_VAL_ITERATIONS_PER_EPOCH="${WNET_VAL_ITERATIONS_PER_EPOCH:-50}"
+    WNET_INITIAL_LR="${WNET_INITIAL_LR:-1e-2}"
+    WNET_WEIGHT_DECAY="${WNET_WEIGHT_DECAY:-3e-5}"
+    WNET_LAYER_CHANNELS="${WNET_LAYER_CHANNELS:-32,64,128,256,320}"
+    WNET_GLOBAL_DIMS="${WNET_GLOBAL_DIMS:-16,32,64,128,160}"
+    WNET_NUM_HEADS="${WNET_NUM_HEADS:-1,2,4,8}"
+    WNET_SR_RATIO="${WNET_SR_RATIO:-8,4,2,1}"
+    WNET_FUSION_METHOD="${WNET_FUSION_METHOD:-channel}"
+    WNET_INIT_STD="${WNET_INIT_STD:-1e-2}"
+    WNET_MOMENTUM="${WNET_MOMENTUM:-0.99}"
+    WNET_NESTEROV="${WNET_NESTEROV:-true}"
+    WNET_OVERSAMPLE_FOREGROUND_PERCENT="${WNET_OVERSAMPLE_FOREGROUND_PERCENT:-0.33}"
+    WNET_NUM_THREADS="${WNET_NUM_THREADS:-32}"
+    WNET_RESULTS_RELATIVE_PATH="${WNET_RESULTS_RELATIVE_PATH:-nnUNetTrainer_WNet3D__${WNET_PLANS_NAME}__${WNET_CONFIG_NAME}}"
+
+    if [ ! -d "${WNET_ROOT}" ]; then
+        echo "❌ 找不到 nnWNet 官方仓库: ${WNET_ROOT}" >&2
+        exit 1
+    fi
+    if [ ! -f "${WNET_ROOT}/nnUNetTrainer_WNet3D.py" ]; then
+        echo "❌ nnWNet 官方仓库中缺少 nnUNetTrainer_WNet3D.py。" >&2
+        exit 1
+    fi
+    if [ ! -f "${CODE_ROOT}/nnUNet/nnunetv2/training/nnUNetTrainer/nnUNetTrainer_WNet3D.py" ]; then
+        echo "❌ 当前 nnUNet 工程中缺少 nnUNetTrainer_WNet3D.py。" >&2
+        exit 1
+    fi
+    if [ "$(git -C "${WNET_ROOT}" rev-parse HEAD 2>/dev/null || true)" != "${WNET_SOURCE_COMMIT}" ]; then
+        echo "⚠️ nnWNet 当前 commit 与记录的官方 commit 不同，将继续使用当前工作树。"
+        git -C "${WNET_ROOT}" rev-parse HEAD 2>/dev/null || true
+    fi
+
+    WNET_DATASET_DIR="${PREPROCESSED_BASE_DIR}/Dataset515_ICH2023"
+    WNET_SOURCE_PLANS_JSON="${WNET_DATASET_DIR}/${WNET_SOURCE_PLAN_NAME}.json"
+    WNET_PLANS_JSON="${WNET_DATASET_DIR}/${WNET_PLANS_NAME}.json"
+    if [ ! -f "${WNET_SOURCE_PLANS_JSON}" ]; then
+        echo "❌ 找不到 nnWNet 源计划文件: ${WNET_SOURCE_PLANS_JSON}" >&2
+        exit 1
+    fi
+    if [ ! -d "${WNET_DATASET_DIR}/nnUNetPlans_segmamba" ]; then
+        echo "❌ 找不到 Dataset515 的 1 mm 训练数据: ${WNET_DATASET_DIR}/nnUNetPlans_segmamba" >&2
+        exit 1
+    fi
+    if [ ! -d "${RAW_BASE_DIR}/Dataset515_ICH2023/imagesTs" ] || \
+       [ ! -d "${RAW_BASE_DIR}/Dataset515_ICH2023/labelsTs" ]; then
+        echo "❌ 找不到 Dataset515 独立测试图像或标签目录。" >&2
+        exit 1
+    fi
+    if [ "${WNET_AUTO_BATCH}" != "true" ] && [ "${WNET_AUTO_BATCH}" != "false" ]; then
+        echo "❌ WNET_AUTO_BATCH 必须为 true 或 false，当前值: ${WNET_AUTO_BATCH}" >&2
+        exit 1
+    fi
+    if ! [[ "${WNET_MAX_LOCAL_BATCH}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "❌ WNET_MAX_LOCAL_BATCH 必须为正整数，当前值: ${WNET_MAX_LOCAL_BATCH}" >&2
+        exit 1
+    fi
+    if [ "${WNET_BATCH_DICE}" != "true" ] && [ "${WNET_BATCH_DICE}" != "false" ]; then
+        echo "❌ WNET_BATCH_DICE 必须为 true 或 false，当前值: ${WNET_BATCH_DICE}" >&2
+        exit 1
+    fi
+    if [ "${WNET_DEEP_SUPERVISION}" != "true" ] && [ "${WNET_DEEP_SUPERVISION}" != "false" ]; then
+        echo "❌ WNET_DEEP_SUPERVISION 必须为 true 或 false，当前值: ${WNET_DEEP_SUPERVISION}" >&2
+        exit 1
+    fi
+    if [ "${WNET_NESTEROV}" != "true" ] && [ "${WNET_NESTEROV}" != "false" ]; then
+        echo "❌ WNET_NESTEROV 必须为 true 或 false，当前值: ${WNET_NESTEROV}" >&2
+        exit 1
+    fi
+    if ! [[ "${WNET_NUM_EPOCHS}" =~ ^[1-9][0-9]*$ ]] || \
+       ! [[ "${WNET_ITERATIONS_PER_EPOCH}" =~ ^[1-9][0-9]*$ ]] || \
+       ! [[ "${WNET_VAL_ITERATIONS_PER_EPOCH}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "❌ WNET_NUM_EPOCHS、WNET_ITERATIONS_PER_EPOCH、WNET_VAL_ITERATIONS_PER_EPOCH 必须为正整数。" >&2
+        exit 1
+    fi
+
+    # Keep nnWNet's plan isolated from the existing UIG plans. The inherited
+    # configuration supplies the 1 mm data identifier and 128x96x96 patch.
+    if [ "${WNET_AUTO_BATCH}" = "true" ] && [ "${WNET_LOCAL_BATCH_SIZE}" -eq 0 ] && [ "${PREPARE_ONLY:-0}" != "1" ]; then
+        WNET_PROBE_OUTPUT="$(CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" \
+            python3 "${CODE_ROOT}/nnUNet/nnunetv2/experiments/probe_nnwnet_batch.py" \
+            --max-local-batch "${WNET_MAX_LOCAL_BATCH}" \
+            --memory-fraction "${WNET_BATCH_MEMORY_FRACTION}" \
+            --layer-channels "${WNET_LAYER_CHANNELS}" \
+            --global-dims "${WNET_GLOBAL_DIMS}" \
+            --num-heads "${WNET_NUM_HEADS}" \
+            --sr-ratio "${WNET_SR_RATIO}" \
+            --init-std "${WNET_INIT_STD}")"
+        WNET_LOCAL_BATCH_SIZE="$(printf '%s\n' "${WNET_PROBE_OUTPUT}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read().splitlines()[-1])["local_batch_size"])')"
+        WNET_BATCH_SIZE="$((WNET_LOCAL_BATCH_SIZE * WNET_WORLD_SIZE))"
+        echo "✅ nnWNet 自动 batch: local=${WNET_LOCAL_BATCH_SIZE}, global=${WNET_BATCH_SIZE}"
+    elif [ "${WNET_AUTO_BATCH}" = "true" ] && [ "${WNET_LOCAL_BATCH_SIZE}" -eq 0 ] && [ "${PREPARE_ONLY:-0}" = "1" ] && [ -f "${WNET_PLANS_JSON}" ]; then
+        # PREPARE_ONLY must not silently replace the last probed batch size
+        # with one sample per rank merely because CUDA probing is skipped.
+        WNET_BATCH_SIZE="$(python3 - "${WNET_PLANS_JSON}" "${WNET_CONFIG_NAME}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as file:
+    config = json.load(file).get("configurations", {}).get(sys.argv[2], {})
+batch_size = config.get("batch_size", 0)
+print(batch_size if isinstance(batch_size, int) and batch_size > 0 else 0)
+PY
+)"
+        if [ "${WNET_BATCH_SIZE}" -gt 0 ] && [ $((WNET_BATCH_SIZE % WNET_WORLD_SIZE)) -eq 0 ]; then
+            WNET_LOCAL_BATCH_SIZE="$((WNET_BATCH_SIZE / WNET_WORLD_SIZE))"
+            echo "ℹ️ PREPARE_ONLY 保留已有 nnWNet batch: local=${WNET_LOCAL_BATCH_SIZE}, global=${WNET_BATCH_SIZE}"
+        else
+            WNET_LOCAL_BATCH_SIZE=1
+            WNET_BATCH_SIZE="${WNET_WORLD_SIZE}"
+        fi
+    elif [ "${WNET_LOCAL_BATCH_SIZE}" -gt 0 ]; then
+        WNET_BATCH_SIZE="$((WNET_LOCAL_BATCH_SIZE * WNET_WORLD_SIZE))"
+    elif [ "${WNET_BATCH_SIZE}" -gt 0 ] && [ $((WNET_BATCH_SIZE % WNET_WORLD_SIZE)) -eq 0 ]; then
+        WNET_LOCAL_BATCH_SIZE="$((WNET_BATCH_SIZE / WNET_WORLD_SIZE))"
+    else
+        WNET_LOCAL_BATCH_SIZE=1
+        WNET_BATCH_SIZE="${WNET_WORLD_SIZE}"
+    fi
+    if ! [[ "${WNET_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${WNET_LOCAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "❌ nnWNet batch 必须为正整数。" >&2
+        exit 1
+    fi
+    if [ "${WNET_BATCH_SIZE}" -ne $((WNET_LOCAL_BATCH_SIZE * WNET_WORLD_SIZE)) ]; then
+        echo "❌ WNET_BATCH_SIZE=${WNET_BATCH_SIZE} 必须等于 WNET_LOCAL_BATCH_SIZE=${WNET_LOCAL_BATCH_SIZE} x ${WNET_WORLD_SIZE} 张 GPU。" >&2
+        exit 1
+    fi
+    python3 - "${WNET_SOURCE_PLANS_JSON}" "${WNET_PLANS_JSON}" "${WNET_PLANS_NAME}" "${WNET_CONFIG_NAME}" "${WNET_CONFIG_PARENT_NAME}" "${WNET_BATCH_SIZE}" "${WNET_BATCH_DICE}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source_path, output_path, plans_name, config_name, parent_name, batch_text, batch_dice_text = sys.argv[1:]
+source = Path(source_path)
+output = Path(output_path)
+with source.open("r", encoding="utf-8") as file:
+    plans = json.load(file)
+configurations = plans.get("configurations")
+if not isinstance(configurations, dict):
+    raise RuntimeError("nnWNet plans 中没有 configurations 字段")
+if parent_name not in configurations:
+    raise RuntimeError(f"nnWNet 配置父项不存在: {parent_name}")
+configurations[config_name] = {
+    "inherits_from": parent_name,
+    "batch_size": int(batch_text),
+    "batch_dice": batch_dice_text == "true",
+}
+plans["plans_name"] = plans_name
+output.parent.mkdir(parents=True, exist_ok=True)
+with output.open("w", encoding="utf-8") as file:
+    json.dump(plans, file, indent=4)
+    file.write("\n")
+print(f"✅ 已生成 nnWNet 独立 plans: {output}")
+print(f"✅ 配置: {config_name} -> {parent_name}")
+print(f"✅ batch_size={batch_text}, batch_dice={batch_dice_text}")
+PY
+
+    # Let the common nnU-Net pipeline below handle all-fold training, test
+    # prediction, post-processing copy, evaluation, paired analysis and the
+    # results board. Only method-specific values are replaced here.
+    PLANS_NAME="${WNET_PLANS_NAME}"
+    CONFIG_NAME="${WNET_CONFIG_NAME}"
+    CONFIG_PARENT_NAME="${WNET_CONFIG_PARENT_NAME}"
+    TRAINER_NAME="nnUNetTrainer_WNet3D"
+    TRAIN_BATCH_SIZE="${WNET_BATCH_SIZE}"
+    TRAIN_BATCH_DICE="${WNET_BATCH_DICE}"
+    NUM_THREADS="${WNET_NUM_THREADS}"
+    export WNET_DEEP_SUPERVISION
+    export WNET_NUM_EPOCHS
+    export WNET_ITERATIONS_PER_EPOCH
+    export WNET_VAL_ITERATIONS_PER_EPOCH
+    export WNET_INITIAL_LR
+    export WNET_WEIGHT_DECAY
+    export WNET_LAYER_CHANNELS
+    export WNET_GLOBAL_DIMS
+    export WNET_NUM_HEADS
+    export WNET_SR_RATIO
+    export WNET_FUSION_METHOD
+    export WNET_INIT_STD
+    export WNET_MOMENTUM
+    export WNET_NESTEROV
+    export WNET_OVERSAMPLE_FOREGROUND_PERCENT
+    BASELINE_MODEL_RELATIVE_PATH="${BASELINE_MODEL_RELATIVE_PATH:-nnUNetTrainer__nnUNetPlans__3d_fullres}"
+
+    # Verify the runtime import before allocating all DDP ranks. WNet emits
+    # five resolutions while old plans may return target lists in another
+    # order; the trainer must match them by spatial shape rather than index.
+    python3 - <<'PY'
+import torch
+
+from nnunetv2.training.loss.compound_losses import DC_and_CE_loss
+from nnunetv2.training.loss.dice import MemoryEfficientSoftDiceLoss
+from nnunetv2.training.nnUNetTrainer.nnUNetTrainer_WNet3D import (
+    WNetShapeMatchedDeepSupervisionWrapper,
+    nnUNetTrainer_WNet3D,
+)
+
+if nnUNetTrainer_WNet3D._get_deep_supervision_scales is None:
+    raise RuntimeError("nnWNet Trainer does not define deep-supervision scales")
+
+base_loss = DC_and_CE_loss(
+    {"batch_dice": False, "smooth": 1e-5, "do_bg": False, "ddp": False},
+    {},
+    dice_class=MemoryEfficientSoftDiceLoss,
+)
+loss = WNetShapeMatchedDeepSupervisionWrapper(base_loss, (1.0, 0.5))
+outputs = [
+    torch.zeros((1, 2, 8, 8, 8)),
+    torch.zeros((1, 2, 4, 4, 4)),
+]
+# Reversed on purpose: this reproduces the stale target-order failure.
+targets = [
+    torch.zeros((1, 1, 4, 4, 4), dtype=torch.long),
+    torch.zeros((1, 1, 8, 8, 8), dtype=torch.long),
+]
+value = loss(outputs, targets)
+if not torch.isfinite(value):
+    raise RuntimeError("nnWNet deep-supervision preflight produced a non-finite loss")
+print("nnWNet deep-supervision preflight passed (shape-matched targets).")
+PY
+
+    echo "====================================================================================="
+    echo "nnWNet Dataset515 训练参数"
+    echo "====================================================================================="
+    echo "Source commit       : ${WNET_SOURCE_COMMIT}"
+    echo "Trainer             : ${TRAINER_NAME}"
+    echo "Plans/configuration : ${PLANS_NAME} / ${CONFIG_NAME}"
+    echo "GPUs                : ${GPU_DEVICES} (${WNET_WORLD_SIZE} cards)"
+    echo "Global/local batch  : ${WNET_BATCH_SIZE} / ${WNET_LOCAL_BATCH_SIZE}"
+    echo "Patch               : 128x96x96 at 1 mm"
+    echo "Epochs/iterations   : ${WNET_NUM_EPOCHS} x ${WNET_ITERATIONS_PER_EPOCH}"
+    echo "Validation iters    : ${WNET_VAL_ITERATIONS_PER_EPOCH}"
+    echo "Optimizer           : SGD(momentum=${WNET_MOMENTUM}, nesterov=${WNET_NESTEROV}), lr=${WNET_INITIAL_LR}, wd=${WNET_WEIGHT_DECAY}"
+    echo "Deep supervision    : ${WNET_DEEP_SUPERVISION}; batch Dice=${WNET_BATCH_DICE}"
+    echo "WNet channels       : local=${WNET_LAYER_CHANNELS}; global=${WNET_GLOBAL_DIMS}"
+    echo "Heads / SR ratios   : ${WNET_NUM_HEADS} / ${WNET_SR_RATIO}"
+    echo "Auto batch          : ${WNET_AUTO_BATCH}; memory fraction=${WNET_BATCH_MEMORY_FRACTION}; max local=${WNET_MAX_LOCAL_BATCH}"
+    echo "====================================================================================="
+fi
+
+
+# 🚀 3D UX-Net Dataset515 外部模型完整流程
+# 该分支使用 MASILab 官方 3D UX-Net，训练表示为 1 mm nnUNetPlans_segmamba，
+# 固定 280/121 train/test 划分，并由适配器执行原始空间 NIfTI 导出、评估、
+# 配对分析、结果看板写入和终端结果打印。
+if [ "${PIPELINE_METHOD}" = "3duxnet" ]; then
+    if [ "${DATASET_ID}" != "515" ]; then
+        echo "❌ 3DUX-Net 外部适配器当前仅实现 Dataset515，DATASET_ID 必须为 515。" >&2
+        exit 1
+    fi
+
+    CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    UXNET_ROOT="${UXNET_ROOT:-${CODE_ROOT}/3DUX-Net}"
+    UXNET_EPOCHS="${UXNET_EPOCHS:-500}"
+    UXNET_ITERATIONS_PER_EPOCH="${UXNET_ITERATIONS_PER_EPOCH:-60}"
+    UXNET_MONITOR_ITERATIONS="${UXNET_MONITOR_ITERATIONS:-8}"
+    UXNET_NUM_WORKERS="${UXNET_NUM_WORKERS:-4}"
+    UXNET_BATCH_MEMORY_FRACTION="${UXNET_BATCH_MEMORY_FRACTION:-0.90}"
+    UXNET_MAX_PROBE_LOCAL_BATCH="${UXNET_MAX_PROBE_LOCAL_BATCH:-16}"
+    UXNET_INFERENCE_BATCH_SIZE="${UXNET_INFERENCE_BATCH_SIZE:-1}"
+    UXNET_RESULTS_DIR="${UXNET_RESULTS_DIR:-${RESULTS_BASE_DIR}/Dataset515_ICH2023/3DUXNet__3DUXNetDataset515_1mm__3duxnet_128x96x96}"
+
+    if [ ! -d "${UXNET_ROOT}" ]; then
+        echo "❌ 找不到 3DUX-Net 仓库: ${UXNET_ROOT}" >&2
+        exit 1
+    fi
+    if [ ! -f "${UXNET_ROOT}/experiments/dataset515/run_dataset515.py" ]; then
+        echo "❌ 找不到 3DUX-Net Dataset515 训练入口。" >&2
+        exit 1
+    fi
+    if [ ! -d "${PREPROCESSED_BASE_DIR}/Dataset515_ICH2023/nnUNetPlans_segmamba" ]; then
+        echo "❌ 找不到 Dataset515 的 1 mm 预处理数据。" >&2
+        exit 1
+    fi
+    if [ ! -d "${RAW_BASE_DIR}/Dataset515_ICH2023/imagesTs" ]; then
+        echo "❌ 找不到 Dataset515 独立测试图像目录。" >&2
+        exit 1
+    fi
+
+    IFS=',' read -r -a UXNET_GPU_ARRAY <<< "${GPU_DEVICES}"
+    UXNET_WORLD_SIZE="${#UXNET_GPU_ARRAY[@]}"
+    if [ "${UXNET_WORLD_SIZE}" -lt 1 ]; then
+        echo "❌ GPU_DEVICES 不能为空。" >&2
+        exit 1
+    fi
+
+    export PYTHONPATH="${UXNET_ROOT}:${CODE_ROOT}/nnUNet${PYTHONPATH:+:${PYTHONPATH}}"
+    export NNUNET_ROOT="${CODE_ROOT}/nnUNet"
+    export NNUNET_DATA_ROOT="${NNUNET_DATA_ROOT:-$(dirname "${RAW_BASE_DIR}")}"
+    export NNUNET_PYTHON="${NNUNET_PYTHON:-${NNUNET_ENV_BIN}/python}"
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+    export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+    export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+    export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
+    UXNET_LOG_FILE="${UXNET_RESULTS_DIR}/3duxnet_dataset515_$(date +%Y%m%d_%H%M%S).log"
+    echo "====================================================================================="
+    echo "3DUX-Net Dataset515 全流程配置"
+    echo "====================================================================================="
+    echo "Model              : official 3D UX-Net (depths=2,2,2,2; feat=48,96,192,384)"
+    echo "GPU devices        : ${GPU_DEVICES} (${UXNET_WORLD_SIZE} cards)"
+    echo "Training schedule  : ${UXNET_EPOCHS} epochs x ${UXNET_ITERATIONS_PER_EPOCH} updates"
+    echo "Batch selection    : real forward/backward probe, memory fraction=${UXNET_BATCH_MEMORY_FRACTION}"
+    echo "Inference batch    : ${UXNET_INFERENCE_BATCH_SIZE} sliding-window patch(es)"
+    echo "Training data      : Dataset515 nnUNetPlans_segmamba, 1 mm, 128x96x96"
+    echo "Test protocol      : fixed 121-case imagesTs/labelsTs independent evaluation"
+    echo "Results            : ${UXNET_RESULTS_DIR}"
+    echo "Log                : ${UXNET_LOG_FILE}"
+    echo "====================================================================================="
+
+    if [ "${PREPARE_ONLY:-0}" = "1" ]; then
+        echo "✅ 3DUX-Net 配置检查完成；PREPARE_ONLY=1，未创建结果目录且未启动训练。"
+        exit 0
+    fi
+
+    mkdir -p "${UXNET_RESULTS_DIR}"
+    cd "${UXNET_ROOT}"
+    CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" \
+    torchrun --standalone --nproc_per_node="${UXNET_WORLD_SIZE}" \
+        experiments/dataset515/run_dataset515.py \
+        --output-dir "${UXNET_RESULTS_DIR}" \
+        --epochs "${UXNET_EPOCHS}" \
+        --iterations-per-epoch "${UXNET_ITERATIONS_PER_EPOCH}" \
+        --monitor-iterations "${UXNET_MONITOR_ITERATIONS}" \
+        --auto-batch \
+        --batch-memory-fraction "${UXNET_BATCH_MEMORY_FRACTION}" \
+        --max-probe-local-batch "${UXNET_MAX_PROBE_LOCAL_BATCH}" \
+        --num-workers "${UXNET_NUM_WORKERS}" \
+        --inference-batch-size "${UXNET_INFERENCE_BATCH_SIZE}" \
+        2>&1 | tee "${UXNET_LOG_FILE}"
+    exit 0
+fi
+
+
+# 🚀 MedNeXt Dataset515 外部模型完整流程
+# 该分支使用官方 MedNeXt-B (kernel 3, deep supervision)，训练表示为 1 mm
+# nnUNetPlans_segmamba，固定 280/121 train/test 划分，并由适配器执行原始
+# 空间 NIfTI 导出、nnU-Net 评估、配对分析、结果看板写入和结果终端打印。
+if [ "${PIPELINE_METHOD}" = "mednext" ]; then
+    if [ "${DATASET_ID}" != "515" ]; then
+        echo "❌ MedNeXt 外部适配器当前仅实现 Dataset515，DATASET_ID 必须为 515。" >&2
+        exit 1
+    fi
+
+    CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    MEDNEXT_ROOT="${MEDNEXT_ROOT:-${CODE_ROOT}/MedNeXt}"
+    MEDNEXT_MODEL_ID="${MEDNEXT_MODEL_ID:-B}"
+    MEDNEXT_KERNEL_SIZE="${MEDNEXT_KERNEL_SIZE:-3}"
+    MEDNEXT_EPOCHS="${MEDNEXT_EPOCHS:-500}"
+    MEDNEXT_ITERATIONS_PER_EPOCH="${MEDNEXT_ITERATIONS_PER_EPOCH:-60}"
+    MEDNEXT_MONITOR_ITERATIONS="${MEDNEXT_MONITOR_ITERATIONS:-8}"
+    MEDNEXT_NUM_WORKERS="${MEDNEXT_NUM_WORKERS:-4}"
+    MEDNEXT_BATCH_MEMORY_FRACTION="${MEDNEXT_BATCH_MEMORY_FRACTION:-0.91}"
+    MEDNEXT_MAX_PROBE_LOCAL_BATCH="${MEDNEXT_MAX_PROBE_LOCAL_BATCH:-32}"
+    MEDNEXT_INFERENCE_BATCH_SIZE="${MEDNEXT_INFERENCE_BATCH_SIZE:-1}"
+    MEDNEXT_RESULTS_DIR="${MEDNEXT_RESULTS_DIR:-${RESULTS_BASE_DIR}/Dataset515_ICH2023/MedNeXt__MedNeXtDataset515_1mm__mednext_${MEDNEXT_MODEL_ID}_k${MEDNEXT_KERNEL_SIZE}_128x96x96}"
+
+    if [ ! -d "${MEDNEXT_ROOT}" ]; then
+        echo "❌ 找不到 MedNeXt 仓库: ${MEDNEXT_ROOT}" >&2
+        exit 1
+    fi
+    if [ ! -f "${MEDNEXT_ROOT}/experiments/dataset515/run_dataset515.py" ]; then
+        echo "❌ 找不到 MedNeXt Dataset515 训练入口。" >&2
+        exit 1
+    fi
+    if [ ! -d "${PREPROCESSED_BASE_DIR}/Dataset515_ICH2023/nnUNetPlans_segmamba" ]; then
+        echo "❌ 找不到 Dataset515 的 1 mm 预处理数据。" >&2
+        exit 1
+    fi
+    if [ ! -d "${RAW_BASE_DIR}/Dataset515_ICH2023/imagesTs" ]; then
+        echo "❌ 找不到 Dataset515 独立测试图像目录。" >&2
+        exit 1
+    fi
+
+    IFS=',' read -r -a MEDNEXT_GPU_ARRAY <<< "${GPU_DEVICES}"
+    MEDNEXT_WORLD_SIZE="${#MEDNEXT_GPU_ARRAY[@]}"
+    if [ "${MEDNEXT_WORLD_SIZE}" -lt 1 ]; then
+        echo "❌ GPU_DEVICES 不能为空。" >&2
+        exit 1
+    fi
+
+    export PYTHONPATH="${MEDNEXT_ROOT}:${CODE_ROOT}/nnUNet${PYTHONPATH:+:${PYTHONPATH}}"
+    export NNUNET_ROOT="${CODE_ROOT}/nnUNet"
+    export NNUNET_DATA_ROOT="${NNUNET_DATA_ROOT:-$(dirname "${RAW_BASE_DIR}")}"
+    export NNUNET_PYTHON="${NNUNET_PYTHON:-${NNUNET_ENV_BIN}/python}"
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+    export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+    export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+    export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
+    MEDNEXT_LOG_FILE="${MEDNEXT_RESULTS_DIR}/mednext_dataset515_$(date +%Y%m%d_%H%M%S).log"
+    echo "====================================================================================="
+    echo "MedNeXt Dataset515 全流程配置"
+    echo "====================================================================================="
+    echo "Model              : MedNeXt-${MEDNEXT_MODEL_ID}, kernel=${MEDNEXT_KERNEL_SIZE}, deep supervision"
+    echo "GPU devices        : ${GPU_DEVICES} (${MEDNEXT_WORLD_SIZE} cards)"
+    echo "Training schedule  : ${MEDNEXT_EPOCHS} epochs x ${MEDNEXT_ITERATIONS_PER_EPOCH} updates"
+    echo "Batch selection    : real backward probe, memory fraction=${MEDNEXT_BATCH_MEMORY_FRACTION}"
+    echo "Inference batch    : ${MEDNEXT_INFERENCE_BATCH_SIZE} sliding-window patch(es)"
+    echo "Training data      : Dataset515 nnUNetPlans_segmamba, 1 mm, 128x96x96"
+    echo "Test protocol      : fixed 121-case imagesTs/labelsTs independent evaluation"
+    echo "Results            : ${MEDNEXT_RESULTS_DIR}"
+    echo "Log                : ${MEDNEXT_LOG_FILE}"
+    echo "====================================================================================="
+
+    if [ "${PREPARE_ONLY:-0}" = "1" ]; then
+        echo "✅ MedNeXt 配置检查完成；PREPARE_ONLY=1，未创建结果目录且未启动训练。"
+        exit 0
+    fi
+
+    mkdir -p "${MEDNEXT_RESULTS_DIR}"
+    cd "${MEDNEXT_ROOT}"
+    CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" \
+    torchrun --standalone --nproc_per_node="${MEDNEXT_WORLD_SIZE}" \
+        experiments/dataset515/run_dataset515.py \
+        --output-dir "${MEDNEXT_RESULTS_DIR}" \
+        --model-id "${MEDNEXT_MODEL_ID}" \
+        --kernel-size "${MEDNEXT_KERNEL_SIZE}" \
+        --epochs "${MEDNEXT_EPOCHS}" \
+        --iterations-per-epoch "${MEDNEXT_ITERATIONS_PER_EPOCH}" \
+        --monitor-iterations "${MEDNEXT_MONITOR_ITERATIONS}" \
+        --auto-batch \
+        --batch-memory-fraction "${MEDNEXT_BATCH_MEMORY_FRACTION}" \
+        --max-probe-local-batch "${MEDNEXT_MAX_PROBE_LOCAL_BATCH}" \
+        --num-workers "${MEDNEXT_NUM_WORKERS}" \
+        --inference-batch-size "${MEDNEXT_INFERENCE_BATCH_SIZE}" \
+        2>&1 | tee "${MEDNEXT_LOG_FILE}"
+    exit 0
+fi
 
 
 # 🚀 4. 通过 DATASET_ID 自动反查并确立 DATASET_NAME

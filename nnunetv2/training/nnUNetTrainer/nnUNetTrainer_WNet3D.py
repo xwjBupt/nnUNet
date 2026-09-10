@@ -1,15 +1,37 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import os
 from torch.nn import init
 import functools
 from torch.distributions.uniform import Uniform
 import numpy as np
 from timm.models.layers import DropPath, trunc_normal_
+from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
 
 BNNorm3d = nn.BatchNorm3d
 LNNorm = nn.LayerNorm
 Activation = nn.GELU
+
+
+def _env_bool(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false, got {value!r}")
+    return normalized == "true"
+
+
+def _env_int_list(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return list(default)
+    try:
+        return [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as error:
+        raise ValueError(f"{name} must be a comma-separated integer list") from error
 
 
 class up_conv(nn.Module):
@@ -504,6 +526,63 @@ class WNet3D(nn.Module):
 
 from torch._dynamo import OptimizedModule
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+from nnunetv2.training.loss.deep_supervision import DeepSupervisionWrapper
+
+
+class WNetShapeMatchedDeepSupervisionWrapper(nn.Module):
+    """Apply each WNet output to the target with the same spatial resolution."""
+
+    def __init__(self, loss, weight_factors):
+        super().__init__()
+        self.loss = loss
+        self.weight_factors = tuple(float(weight) for weight in weight_factors)
+
+    @staticmethod
+    def _spatial_shape(tensor):
+        return tuple(tensor.shape[2:])
+
+    def forward(self, outputs, targets):
+        if not isinstance(outputs, (tuple, list)):
+            return self.loss(outputs, targets)
+        if not isinstance(targets, (tuple, list)):
+            raise TypeError(
+                "WNet deep supervision expects targets to be a list or tuple"
+            )
+
+        targets = list(targets)
+        used_target_indices = set()
+        total = outputs[0].new_zeros((), dtype=torch.float32)
+
+        for output_index, output in enumerate(outputs):
+            weight = self.weight_factors[output_index]
+            if weight == 0.0:
+                continue
+
+            output_shape = self._spatial_shape(output)
+            target_index = next(
+                (
+                    index
+                    for index, target in enumerate(targets)
+                    if index not in used_target_indices
+                    and self._spatial_shape(target) == output_shape
+                ),
+                None,
+            )
+
+            if target_index is None:
+                # This is a defensive fallback for an old/malformed transform.
+                # The normal path always finds an exact target resolution.
+                target = targets[0]
+                target = F.interpolate(
+                    target.float(), size=output_shape, mode="nearest"
+                ).to(dtype=target.dtype)
+            else:
+                used_target_indices.add(target_index)
+                target = targets[target_index]
+
+            total = total + weight * self.loss(output, target)
+
+        return total
 
 
 class nnUNetTrainer_WNet3D(nnUNetTrainer):
@@ -513,17 +592,25 @@ class nnUNetTrainer_WNet3D(nnUNetTrainer):
         configuration: str,
         fold: int,
         dataset_json: dict,
-        unpack_dataset: bool = True,
         device: torch.device = torch.device("cuda"),
     ):
-        super().__init__(
-            plans, configuration, fold, dataset_json, unpack_dataset, device
-        )
-        self.enable_deep_supervision = True
+        super().__init__(plans, configuration, fold, dataset_json, device)
+        self.enable_deep_supervision = _env_bool("WNET_DEEP_SUPERVISION", True)
         # self.oversample_foreground_percent = 0.6
-        self.initial_lr = 1e-2
-        # self.weight_decay = 3e-5
-        self.num_epochs = 500
+        self.initial_lr = float(os.environ.get("WNET_INITIAL_LR", "1e-2"))
+        self.weight_decay = float(os.environ.get("WNET_WEIGHT_DECAY", "3e-5"))
+        self.wnet_momentum = float(os.environ.get("WNET_MOMENTUM", "0.99"))
+        self.wnet_nesterov = _env_bool("WNET_NESTEROV", True)
+        self.oversample_foreground_percent = float(
+            os.environ.get("WNET_OVERSAMPLE_FOREGROUND_PERCENT", "0.33")
+        )
+        self.num_epochs = int(os.environ.get("WNET_NUM_EPOCHS", "500"))
+        self.num_iterations_per_epoch = int(
+            os.environ.get("WNET_ITERATIONS_PER_EPOCH", "250")
+        )
+        self.num_val_iterations_per_epoch = int(
+            os.environ.get("WNET_VAL_ITERATIONS_PER_EPOCH", "50")
+        )
 
     def set_deep_supervision_enabled(self, enabled: bool):
         """
@@ -538,11 +625,60 @@ class nnUNetTrainer_WNet3D(nnUNetTrainer):
             mod = mod._orig_mod
         mod.deep_supervised = enabled
 
+    def _get_deep_supervision_scales(self):
+        """Match the five WNet outputs, independent of the inherited plan."""
+        if not self.enable_deep_supervision:
+            return None
+        return [
+            [1.0, 1.0, 1.0],
+            [0.5, 0.5, 0.5],
+            [0.25, 0.25, 0.25],
+            [0.125, 0.125, 0.125],
+            [0.0625, 0.0625, 0.0625],
+        ]
+
+    def _build_loss(self):
+        loss = super()._build_loss()
+        if not self.enable_deep_supervision:
+            return loss
+        if not isinstance(loss, DeepSupervisionWrapper):
+            raise TypeError(
+                "Expected nnUNet to create a DeepSupervisionWrapper for WNet"
+            )
+        return WNetShapeMatchedDeepSupervisionWrapper(
+            loss.loss, loss.weight_factors
+        )
+
+    @staticmethod
+    def _sort_targets_by_resolution(targets):
+        return sorted(
+            list(targets), key=lambda target: target[0].numel(), reverse=True
+        )
+
+    def validation_step(self, batch: dict) -> dict:
+        # The base validation code uses output[0] and target[0] for online
+        # metrics. Keep the full-resolution target at index zero even when a
+        # stale transform returns deep-supervision targets in reverse order.
+        if self.enable_deep_supervision and isinstance(batch.get("target"), (list, tuple)):
+            batch = dict(batch)
+            batch["target"] = self._sort_targets_by_resolution(batch["target"])
+        return super().validation_step(batch)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.SGD(
+            self.network.parameters(),
+            self.initial_lr,
+            weight_decay=self.weight_decay,
+            momentum=self.wnet_momentum,
+            nesterov=self.wnet_nesterov,
+        )
+        lr_scheduler = PolyLRScheduler(optimizer, self.initial_lr, self.num_epochs)
+        return optimizer, lr_scheduler
+
     @staticmethod
     def build_network_architecture(
-        architecture_class_name,
-        arch_init_kwargs,
-        arch_init_kwargs_req_import,
+        plans_manager,
+        configuration_manager,
         num_input_channels,
         num_output_channels,
         enable_deep_supervision,
@@ -552,10 +688,30 @@ class nnUNetTrainer_WNet3D(nnUNetTrainer):
             InitWeights_He,
         )
 
+        layer_channel = _env_int_list("WNET_LAYER_CHANNELS", [32, 64, 128, 256, 320])
+        global_dim = _env_int_list("WNET_GLOBAL_DIMS", [16, 32, 64, 128, 160])
+        num_heads = _env_int_list("WNET_NUM_HEADS", [1, 2, 4, 8])
+        sr_ratio = _env_int_list("WNET_SR_RATIO", [8, 4, 2, 1])
+        if len(layer_channel) != 5:
+            raise ValueError("WNET_LAYER_CHANNELS must contain 5 integers")
+        if len(global_dim) != 5:
+            raise ValueError("WNET_GLOBAL_DIMS must contain 5 integers")
+        if len(num_heads) != 4:
+            raise ValueError("WNET_NUM_HEADS must contain 4 integers")
+        if len(sr_ratio) != 4:
+            raise ValueError("WNET_SR_RATIO must contain 4 integers")
+
         model = WNet3D(
             in_channel=num_input_channels,
             num_classes=num_output_channels,
             deep_supervised=enable_deep_supervision,
+            layer_channel=layer_channel,
+            global_dim=global_dim,
+            num_heads=num_heads,
+            sr_ratio=sr_ratio,
+            fusion_method=os.environ.get("WNET_FUSION_METHOD", "channel"),
         )
-        model.apply(InitWeights_He(1e-2))
+        model.apply(
+            InitWeights_He(float(os.environ.get("WNET_INIT_STD", "1e-2")))
+        )
         return model
